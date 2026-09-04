@@ -1,0 +1,2 @@
+[    8052ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:4310/ws/events' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:4310/assets/index-S3OnW23e.js:39
+[   10133ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:4310/ws/events' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:4310/assets/index-S3OnW23e.js:39

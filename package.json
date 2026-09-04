@@ -1,0 +1,44 @@
+{
+  "name": "tower",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tower: one window for every Claude Code and Codex session, hosted in tmux",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k -n server,ui,electron -c blue,magenta,green \"npm:dev:server\" \"npm:dev:ui\" \"npm:dev:electron\"",
+    "dev:server": "cross-env ELECTRON_RUN_AS_NODE=1 electron node_modules/tsx/dist/cli.mjs watch server/index.ts",
+    "dev:ui": "vite --config ui/vite.config.ts",
+    "dev:electron": "wait-on http://localhost:5173 && cross-env MS_DEV=1 electron .",
+    "build": "npm run build:ui && npm run build:server",
+    "build:ui": "vite build --config ui/vite.config.ts",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/server.cjs --external:node-pty",
+    "start": "npm run build && electron .",
+    "server": "tsx server/index.ts",
+    "postinstall": "electron-rebuild -f -w node-pty"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.5.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "concurrently": "^9.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.0",
+    "esbuild": "^0.24.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "wait-on": "^8.0.0"
+  }
+}
