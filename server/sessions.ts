@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { scanClaudeSessions, liveClaudeSessions, transcriptMtime } from './claude.js';
+import { scanClaudeSessions, liveClaudeSessions, transcriptMtime, type ClaudeLive } from './claude.js';
 import { scanCodexSessions } from './codex.js';
-import { listPanes, createSession, hasSession, renameSession, killSession, type TmuxPane } from './tmux.js';
+import { listPanes, createSession, hasSession, renameSession, killSession, paneDescendants, type TmuxPane } from './tmux.js';
 import { loadSettings } from './settings.js';
 import { projectName, HOME, APP_DIR } from './config.js';
 import { shQuote } from './shell.js';
@@ -37,10 +37,27 @@ export async function buildSnapshot(): Promise<Snapshot> {
     listPanes(),
   ]);
   const liveClaude = liveClaudeSessions();
-  const paneBySession = new Map<string, TmuxPane>();
-  for (const p of panes) paneBySession.set(p.session, p);
-
   await resolvePendingCodex(codex, panes);
+
+  // Map each tmux pane to the session it is really running. Claude Code can move a process onto a new
+  // session id after launch (/clear, or resuming a session that was still open elsewhere), so the pane
+  // name alone is not enough: prefer the pid recorded in Claude's live registry.
+  const liveByPid = new Map<number, ClaudeLive>();
+  for (const r of liveClaude.values()) liveByPid.set(r.pid, r);
+  const paneForKey = new Map<string, TmuxPane>();
+  const attachedPanes = new Set<string>();
+  for (const p of panes) {
+    const parsed = parseTmuxName(p.session);
+    if (!parsed) continue;
+    let id = parsed.id;
+    if (parsed.agent === 'claude') {
+      let reg = liveByPid.get(p.pid);
+      if (!reg) for (const pid of await paneDescendants(p.pid)) { reg = liveByPid.get(pid); if (reg) break; }
+      if (reg) id = reg.sessionId;
+    }
+    const key = `${parsed.agent}:${id}`;
+    if (!paneForKey.has(key)) paneForKey.set(key, p);
+  }
 
   const now = Date.now();
   const sessions: Session[] = [];
@@ -49,7 +66,8 @@ export async function buildSnapshot(): Promise<Snapshot> {
   for (const s of [...claude, ...codex]) {
     if (s.importedFrom && !settings.showImported) continue;
     if (s.archived) continue;
-    const pane = paneBySession.get(tmuxName(s.agent, s.id));
+    const pane = paneForKey.get(s.key);
+    if (pane) attachedPanes.add(pane.session);
     const reg = s.agent === 'claude' ? liveClaude.get(s.id) : undefined;
     if (reg?.name) s.agentName = reg.name;
 
@@ -75,6 +93,7 @@ export async function buildSnapshot(): Promise<Snapshot> {
 
   // tmux sessions we manage that have no transcript yet (fresh launches)
   for (const p of panes) {
+    if (attachedPanes.has(p.session)) continue;
     const parsed = parseTmuxName(p.session);
     if (!parsed) continue;
     const key = `${parsed.agent}:${parsed.id}`;
