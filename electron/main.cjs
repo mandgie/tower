@@ -58,6 +58,7 @@ function buildMenu() {
     ] },
     { label: 'Session', submenu: [
       { label: 'New Session', accelerator: 'Cmd+N', click: send('new') },
+      { label: 'New Session Here', accelerator: 'Cmd+D', click: send('duplicate') },
       { label: 'Find Session', accelerator: 'Cmd+K', click: send('search') },
       { type: 'separator' },
       { label: 'Remove Pane from Workspace', accelerator: 'Cmd+W', click: send('close-pane') },

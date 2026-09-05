@@ -217,12 +217,23 @@ export function App() {
     const s = byTmux.get(panes[j].tmux); if (s) setSelectedKey(s.key);
   }, [active, focused, byTmux]);
 
+  // Cmd+D: a fresh session in the same folder and with the same agent as the focused pane, beside it.
+  const duplicate = useCallback(async () => {
+    // Fall back to the first pane of the active workspace, since focus is not restored after a reload.
+    const paneTmux = focused ?? active?.panes[0]?.tmux;
+    const src = (paneTmux && byTmux.get(paneTmux)) || selected;
+    if (!src) { setNewOpen({}); return; }
+    try { await launch({ agent: src.agent, cwd: src.cwd, skipPermissions: localStorage.getItem('ms.skipPerms') !== '0' }); }
+    catch (e) { setError((e as Error).message); }
+  }, [focused, active, byTmux, selected, launch]);
+
   // Keyboard shortcuts (also forwarded from the Electron menu).
   useEffect(() => {
     const run = (cmd: string) => {
       if (cmd === 'new') setNewOpen({ cwd: selected?.cwd });
       else if (cmd === 'search') { setSidebarOpen(true); setTimeout(() => searchRef.current?.focus(), 0); }
       else if (cmd === 'toggle-sidebar') setSidebarOpen((v) => !v);
+      else if (cmd === 'duplicate') duplicate();
       else if (cmd === 'close-pane' && focused) removePane(focused);
       else if (cmd === 'maximize' && focused) setMaximized(active?.maximized === focused ? null : focused);
       else if (cmd === 'new-workspace') createWorkspace();
@@ -249,6 +260,7 @@ export function App() {
       if (e.altKey && e.key.startsWith('Arrow')) { e.preventDefault(); run(`focus:${e.key.slice(5).toLowerCase()}`); }
       else if (e.key === 'n') { e.preventDefault(); run('new'); }
       else if (e.key === 'b') { e.preventDefault(); run('toggle-sidebar'); }
+      else if (e.key === 'd' && !e.shiftKey) { e.preventDefault(); run('duplicate'); }
       else if (e.key === 'k' || e.key === 'p') { e.preventDefault(); run('search'); }
       else if (e.key === ',') { e.preventDefault(); run('settings'); }
       else if (e.key === 't') { e.preventDefault(); run('new-workspace'); }
@@ -262,7 +274,7 @@ export function App() {
     window.addEventListener('keydown', onKey, true);
     const off = window.multisession?.onCommand(run);
     return () => { window.removeEventListener('keydown', onKey, true); off?.(); };
-  }, [selected, focused, active, workspaces, activeId, newOpen, settingsOpen, removePane, setMaximized, createWorkspace, activateWorkspace, moveFocus]);
+  }, [selected, focused, active, workspaces, activeId, newOpen, settingsOpen, removePane, setMaximized, createWorkspace, activateWorkspace, moveFocus, duplicate]);
 
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(null), 6000); return () => clearTimeout(t); }, [error]);
 

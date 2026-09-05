@@ -56,6 +56,7 @@ active time, and transcript size on disk.
 | Key | Action |
 | --- | --- |
 | ⌘N | New session |
+| ⌘D | New session here: same folder and agent as the focused pane, opened beside it |
 | ⌘K | Search sessions (shows the list if hidden) |
 | ⌘B | Show or hide the session list |
 | ⌘⇧R | Rename workspace (or double-click its name) |
