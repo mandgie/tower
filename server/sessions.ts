@@ -39,22 +39,13 @@ export async function buildSnapshot(): Promise<Snapshot> {
   const liveClaude = liveClaudeSessions();
   await resolvePendingCodex(codex, panes);
 
-  // Map each tmux pane to the session it is really running. Claude Code can move a process onto a new
-  // session id after launch (/clear, or resuming a session that was still open elsewhere), so the pane
-  // name alone is not enough: prefer the pid recorded in Claude's live registry.
-  const liveByPid = new Map<number, ClaudeLive>();
-  for (const r of liveClaude.values()) liveByPid.set(r.pid, r);
+  const paneRegistry = await reconcilePaneNames(panes, liveClaude);
   const paneForKey = new Map<string, TmuxPane>();
   const attachedPanes = new Set<string>();
   for (const p of panes) {
     const parsed = parseTmuxName(p.session);
     if (!parsed) continue;
-    let id = parsed.id;
-    if (parsed.agent === 'claude') {
-      let reg = liveByPid.get(p.pid);
-      if (!reg) for (const pid of await paneDescendants(p.pid)) { reg = liveByPid.get(pid); if (reg) break; }
-      if (reg) id = reg.sessionId;
-    }
+    const id = paneRegistry.get(p.session)?.sessionId ?? parsed.id;
     const key = `${parsed.agent}:${id}`;
     if (!paneForKey.has(key)) paneForKey.set(key, p);
   }
@@ -99,10 +90,12 @@ export async function buildSnapshot(): Promise<Snapshot> {
     const key = `${parsed.agent}:${parsed.id}`;
     if (byKey.has(key)) continue;
     const pend = pending.get(p.session);
-    const cwd = pend?.cwd || HOME;
+    const reg = paneRegistry.get(p.session);
+    const cwd = pend?.cwd || reg?.cwd || HOME;
     const s: Session = {
       key, id: parsed.id, agent: parsed.agent, cwd, project: projectName(cwd),
-      title: pend ? 'New session' : 'Session',
+      title: reg?.name ? `New session (${reg.name})` : pend ? 'New session' : 'Session',
+      agentName: reg?.name,
       firstPrompt: '', createdAt: p.created, updatedAt: Math.max(p.activity, p.created),
       live: { kind: 'tmux', tmux: p.session, dead: p.dead, pid: p.pid },
       status: p.dead ? 'ended' : (now - p.activity < WORKING_WINDOW_MS ? 'working' : 'waiting'),
@@ -127,6 +120,35 @@ export async function buildSnapshot(): Promise<Snapshot> {
   const projects = [...projMap.values()].sort((a, b) => b.updatedAt - a.updatedAt);
 
   return { generatedAt: now, sessions, projects, pending: [...pending.values()] };
+}
+
+/**
+ * Claude Code can move a process onto a new session id after launch (/clear, or resuming a session that
+ * was still open elsewhere). Rename such panes so the tmux name follows the process, and return the
+ * registry entry for every pane that has one. Panes are updated in place.
+ */
+async function reconcilePaneNames(panes: TmuxPane[], liveClaude: Map<string, ClaudeLive>): Promise<Map<string, ClaudeLive>> {
+  const liveByPid = new Map<number, ClaudeLive>();
+  for (const r of liveClaude.values()) liveByPid.set(r.pid, r);
+  const names = new Set(panes.map((p) => p.session));
+  const out = new Map<string, ClaudeLive>();
+  for (const p of panes) {
+    const parsed = parseTmuxName(p.session);
+    if (!parsed || parsed.agent !== 'claude') continue;
+    let reg = liveByPid.get(p.pid);
+    if (!reg) for (const pid of await paneDescendants(p.pid)) { reg = liveByPid.get(pid); if (reg) break; }
+    if (!reg) continue;
+    if (reg.sessionId !== parsed.id) {
+      const target = tmuxName('claude', reg.sessionId);
+      if (!names.has(target)) {
+        await renameSession(p.session, target);
+        names.delete(p.session); names.add(target);
+        p.session = target;
+      }
+    }
+    out.set(p.session, reg);
+  }
+  return out;
 }
 
 async function resolvePendingCodex(codex: Session[], panes: TmuxPane[]): Promise<void> {
@@ -194,7 +216,14 @@ export async function launchNew(o: LaunchOptions): Promise<{ tmux: string; key?:
 export async function resumeSession(s: Session, o: { skipPermissions?: boolean; fork?: boolean } = {}): Promise<{ tmux: string }> {
   const settings = loadSettings();
   const name = tmuxName(s.agent, s.id);
-  if (await hasSession(name)) return { tmux: name };
+  if (s.agent === 'claude') {
+    // Make pane names follow their processes first, so a pane that moved to another id does not shadow this one.
+    const panes = await listPanes();
+    const reg = await reconcilePaneNames(panes, liveClaudeSessions());
+    const existing = panes.find((p) => p.session === name);
+    if (existing && (reg.get(name)?.sessionId ?? s.id) === s.id) return { tmux: name };
+    if (existing) throw new Error('A different session is running in this pane. Kill it first, then resume.');
+  } else if (await hasSession(name)) return { tmux: name };
   const cwd = fs.existsSync(s.cwd) ? s.cwd : HOME;
   if (s.agent === 'claude') {
     const parts = ['claude', '--resume', s.id, ...claudeArgs(settings, { agent: 'claude', cwd, skipPermissions: o.skipPermissions })];

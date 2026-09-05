@@ -90,7 +90,8 @@ export function App() {
       const panes = w.panes.map((p) => {
         if (liveNames.has(p.tmux)) return p;
         const candidates = [...liveNames].filter((n) => !inPanes.has(n) && n.startsWith(`ms-${p.agent}-`));
-        if (p.tmux.includes('-new-') && candidates.length === 1) {
+        // The pane was renamed (Codex id resolved, or a Claude process moved to a new session id).
+        if (candidates.length === 1) {
           changed = true; inPanes.add(candidates[0]);
           if (focused === p.tmux) focusMoved = candidates[0];
           return { ...p, tmux: candidates[0] };
