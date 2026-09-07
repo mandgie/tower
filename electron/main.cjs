@@ -54,6 +54,7 @@ function buildMenu() {
     { label: app.name, submenu: [
       { role: 'about' }, { type: 'separator' },
       { label: 'Settings…', accelerator: 'Cmd+,', click: send('settings') },
+      { label: 'Check Setup…', click: send('doctor') },
       { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' },
     ] },
     { label: 'Session', submenu: [

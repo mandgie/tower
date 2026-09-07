@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Session, Agent } from '../../shared/types';
+import type { Session, Agent, DoctorResult } from '../../shared/types';
 import { api, useSnapshot } from './api';
 import { StatusStrip } from './components/StatusStrip';
 import { Sidebar } from './components/Sidebar';
@@ -7,6 +7,7 @@ import { Transcript } from './components/Transcript';
 import { SessionHeader } from './components/SessionHeader';
 import { NewSession } from './components/NewSession';
 import { SettingsPanel } from './components/SettingsPanel';
+import { Doctor } from './components/Doctor';
 import { WorkspaceBar, isAutoName, PaneGrid, gridColumns, type Workspace, type Pane } from './components/Workspace';
 
 declare global {
@@ -48,6 +49,8 @@ export function App() {
   const [search, setSearch] = useState('');
   const [newOpen, setNewOpen] = useState<{ cwd?: string; agent?: Agent } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [doctorOpen, setDoctorOpen] = useState(false);
+  const [doctor, setDoctor] = useState<DoctorResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem(SIDEBAR_KEY) !== '0');
@@ -56,6 +59,11 @@ export function App() {
 
   useEffect(() => { localStorage.setItem(WS_KEY, JSON.stringify({ workspaces, activeId })); }, [workspaces, activeId]);
   useEffect(() => { localStorage.setItem(VIEW_KEY, view); }, [view]);
+
+  // First-run setup check: open the doctor when a required tool (or every agent CLI) is missing.
+  useEffect(() => {
+    api.doctor().then((r) => { setDoctor(r); if (!r.ok) setDoctorOpen(true); }).catch(() => {});
+  }, []);
 
   const sessions = snapshot?.sessions ?? [];
   const byKey = useMemo(() => new Map(sessions.map((s) => [s.key, s])), [sessions]);
@@ -239,6 +247,7 @@ export function App() {
       else if (cmd === 'new-workspace') createWorkspace();
       else if (cmd === 'rename-workspace') setRenaming(activeId);
       else if (cmd === 'settings') setSettingsOpen((v) => !v);
+      else if (cmd === 'doctor') setDoctorOpen(true);
       else if (cmd.startsWith('workspace:')) { const w = workspaces[Number(cmd.slice(10)) - 1]; if (w) activateWorkspace(w.id); }
       else if (cmd === 'next-workspace' || cmd === 'prev-workspace') {
         if (workspaces.length < 2) return;
@@ -251,9 +260,9 @@ export function App() {
       const meta = e.metaKey || e.ctrlKey;
       if (!meta) {
         if (e.key === 'Escape') {
-          setNewOpen(null); setSettingsOpen(false);
+          setNewOpen(null); setSettingsOpen(false); setDoctorOpen(false);
           // Restore the grid without letting ESC reach the agent (Claude treats ESC as interrupt).
-          if (active?.maximized && !newOpen && !settingsOpen) { e.preventDefault(); e.stopPropagation(); setMaximized(null); }
+          if (active?.maximized && !newOpen && !settingsOpen && !doctorOpen) { e.preventDefault(); e.stopPropagation(); setMaximized(null); }
         }
         return;
       }
@@ -274,7 +283,7 @@ export function App() {
     window.addEventListener('keydown', onKey, true);
     const off = window.multisession?.onCommand(run);
     return () => { window.removeEventListener('keydown', onKey, true); off?.(); };
-  }, [selected, focused, active, workspaces, activeId, newOpen, settingsOpen, removePane, setMaximized, createWorkspace, activateWorkspace, moveFocus, duplicate]);
+  }, [selected, focused, active, workspaces, activeId, newOpen, settingsOpen, doctorOpen, removePane, setMaximized, createWorkspace, activateWorkspace, moveFocus, duplicate]);
 
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(null), 6000); return () => clearTimeout(t); }, [error]);
 
@@ -331,7 +340,8 @@ export function App() {
         </main>
       </div>
       {newOpen && <NewSession preset={newOpen} projects={snapshot?.projects ?? []} onClose={() => setNewOpen(null)} onLaunch={launch} />}
-      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} onDoctor={() => { setSettingsOpen(false); setDoctorOpen(true); }} />}
+      {doctorOpen && <Doctor initial={doctor} onClose={() => setDoctorOpen(false)} />}
       {error && <div className="toast" role="alert">{error}</div>}
     </div>
   );

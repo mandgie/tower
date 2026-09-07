@@ -264,4 +264,27 @@ details summary::-webkit-details-marker { display: none; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .label { font-size: 12px; color: var(--mist); font-weight: 600; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/* ---------- doctor (setup check) ---------- */
+.doctor-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; background: var(--ink); overflow: hidden; }
+.doctor-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.doctor-row:last-child { border-bottom: 0; }
+.doctor-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; margin-top: 5px; background: var(--ended); }
+.doctor-row.ok .doctor-dot { background: var(--codex); box-shadow: 0 0 6px rgba(127,224,200,0.5); }
+.doctor-row.missing .doctor-dot { background: var(--danger); box-shadow: 0 0 0 3px rgba(240,113,120,0.2); }
+.doctor-row.optional .doctor-dot { background: var(--wait); box-shadow: 0 0 0 3px rgba(255,209,102,0.2); }
+.doctor-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.doctor-title { display: flex; align-items: baseline; gap: 8px; }
+.doctor-label { font-weight: 600; color: var(--fog); }
+.doctor-tag { font-size: 11px; color: var(--dim); font-family: var(--font-mono); }
+.doctor-row.missing .doctor-tag { color: var(--danger); }
+.doctor-row.optional .doctor-tag { color: var(--wait); }
+.doctor-detail { color: var(--mist); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doctor-hint { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.doctor-hint code { flex: 1; min-width: 0; padding: 4px 8px; background: var(--raised); border: 1px solid var(--line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.btn.small { padding: 2px 8px; font-size: 11px; }
+.doctor-warn { margin: 0; color: var(--wait); }
+.doctor-env summary { cursor: pointer; }
+.doctor-env .label { display: inline-block; min-width: 44px; }
+.doctor-path { margin-top: 4px; padding: 6px 8px; background: var(--ink); border: 1px solid var(--line); border-radius: 6px; color: var(--mist); max-height: 140px; overflow: auto; word-break: break-all; }
+
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--raised); border: 1px solid var(--danger); color: var(--fog); padding: 10px 16px; border-radius: 8px; z-index: 30; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
