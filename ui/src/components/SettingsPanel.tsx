@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Settings } from '../../../shared/types';
 import { api } from '../api';
 
-export function SettingsPanel({ onClose }: { onClose: () => void }) {
+export function SettingsPanel({ onClose, onDoctor }: { onClose: () => void; onDoctor?: () => void }) {
   const [s, setS] = useState<Settings | null>(null);
   const [saved, setSaved] = useState(false);
   useEffect(() => { api.settings().then(setS); }, []);
@@ -24,6 +24,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           Show Codex threads that were imported from Claude <span className="muted">(duplicates)</span></label>
         <p className="muted small">Sessions live in tmux socket <code>multisession</code>. From any terminal: <code>tmux -L multisession attach</code>.</p>
         <div className="modal-actions">
+          {onDoctor && <button type="button" className="btn ghost" style={{ marginRight: 'auto' }} onClick={onDoctor}>Check setup</button>}
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn primary">{saved ? 'Saved' : 'Save'}</button>
         </div>

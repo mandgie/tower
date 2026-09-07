@@ -95,3 +95,22 @@ export interface SessionStats {
 }
 
 export interface TranscriptResponse { messages: Message[]; stats: SessionStats }
+
+export type DoctorId = 'tmux' | 'claude' | 'codex' | 'sqlite3';
+
+export interface DoctorCheck {
+  id: DoctorId;
+  label: string;
+  required: boolean;   // the app cannot work without it
+  found: boolean;
+  path?: string;       // resolved executable on the login PATH
+  version?: string;    // first line of `--version` / `-V`
+  hint: string;        // the exact command that fixes a missing tool
+}
+
+export interface DoctorResult {
+  checks: DoctorCheck[];
+  ok: boolean;         // every required tool found and at least one agent CLI present
+  path: string;        // PATH as Tower sees it (login shell)
+  shell: string;
+}

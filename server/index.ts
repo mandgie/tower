@@ -10,6 +10,7 @@ import { codexTranscript } from './codex.js';
 import { ensureServer, capturePane, sendKeys } from './tmux.js';
 import { attachTerminal } from './pty.js';
 import { loadSettings, saveSettings } from './settings.js';
+import { runDoctor, doctorSummary } from './doctor.js';
 import type { Snapshot } from '../shared/types.js';
 
 const here = typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
@@ -64,6 +65,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     if (m === 'GET' && p === '/api/settings') return json(res, 200, loadSettings());
     if (m === 'PUT' && p === '/api/settings') { const s = saveSettings(await readBody(req)); refresh(); return json(res, 200, s); }
     if (m === 'GET' && p === '/api/projects/dirs') return json(res, 200, { dirs: listProjectDirs() });
+    if (m === 'GET' && p === '/api/doctor') return json(res, 200, await runDoctor());
 
     let mm = p.match(/^\/api\/sessions\/(claude|codex)\/([^/]+)\/(transcript|resume|fork)$/);
     if (mm) {
@@ -135,6 +137,7 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 async function main() {
+  runDoctor().then((r) => console.log(`[doctor] ${doctorSummary(r)}`));
   await ensureServer().catch((e) => console.error('[tmux] ensure failed', e));
   await refresh();
   setInterval(refresh, 2000);

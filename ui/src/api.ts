@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Snapshot, Settings, Agent, TranscriptResponse } from '../../shared/types';
+import type { Snapshot, Settings, Agent, TranscriptResponse, DoctorResult } from '../../shared/types';
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { headers: { 'content-type': 'application/json' }, ...init });
@@ -22,6 +22,7 @@ export const api = {
   settings: () => j<Settings>('/api/settings'),
   saveSettings: (s: Partial<Settings>) => j<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),
   projectDirs: () => j<{ dirs: string[] }>('/api/projects/dirs'),
+  doctor: () => j<DoctorResult>('/api/doctor'),
 };
 
 export function wsUrl(path: string): string {
