@@ -17,7 +17,25 @@ Development (hot reload for the UI, restart server on change):
 npm run dev
 ```
 
-The server listens on http://127.0.0.1:4310 and also works in a normal browser.
+With `npm run dev` and `npm start` the server listens on http://127.0.0.1:4310 and also works in a
+normal browser. The packaged app picks a free port instead.
+
+## Build the app
+
+```sh
+npm run dist       # build UI + server, then package with electron-builder
+```
+
+The result is `release/Tower-0.1.0-arm64.dmg` (Apple Silicon). Open it and drag Tower to
+Applications. The build is ad-hoc signed, not notarized, so the first launch needs a right-click
+(or Control-click) on Tower.app, then **Open**, and **Open** again in the dialog. After that it
+opens normally.
+
+The app icon comes from `build/icon.svg`; `npm run icon` re-renders `build/icon.icns` from it with
+macOS tools only (`qlmanage`, `sips`, `iconutil`).
+
+A packaged Tower and a dev checkout can run side by side: the dev build calls itself "Tower Dev"
+and keeps its own settings folder under `~/Library/Application Support`.
 
 ## What it reads
 
@@ -73,6 +91,7 @@ active time, and transcript size on disk.
 ```
 server/    Node backend: scanners, tmux, pty bridge, HTTP + WebSocket API
 ui/        Vite + React front end, xterm.js terminals, workspace grid (components/Workspace.tsx)
-electron/  Window shell and menu; spawns the server bundle
+electron/  Window shell and menu; runs the server bundle in a utility process
+build/     App icon (SVG source and generated icns)
 shared/    Types shared by server and UI
 ```

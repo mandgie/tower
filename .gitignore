@@ -3,3 +3,6 @@ dist
 ui/dist
 .DS_Store
 .playwright-mcp
+release
+build/icon.iconset
+build/*.png

@@ -7,7 +7,8 @@ export const CLAUDE_DIR = path.join(HOME, '.claude');
 export const CODEX_DIR = path.join(HOME, '.codex');
 export const APP_DIR = path.join(HOME, '.multisession');
 export const TMUX_SOCKET = 'multisession';
-export const PORT = Number(process.env.MS_PORT || 4310);
+/** Port to listen on. 0 (MS_PORT unset) lets the OS pick a free one; the chosen port is reported to Electron. */
+export const PORT = Number(process.env.MS_PORT || 0);
 
 fs.mkdirSync(APP_DIR, { recursive: true });
 

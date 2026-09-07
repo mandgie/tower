@@ -141,6 +141,25 @@ async function main() {
   try {
     fs.watch(path.join(process.env.HOME || '', '.claude', 'sessions'), () => setTimeout(refresh, 100));
   } catch { /* dir may not exist */ }
-  server.listen(PORT, '127.0.0.1', () => console.log(`[multisession] http://127.0.0.1:${PORT}`));
+  listen(PORT);
+}
+
+/** Listen on `port`; if a preferred port is taken, fall back to a free one (port 0). */
+function listen(port: number): void {
+  const onError = (e: NodeJS.ErrnoException) => {
+    if (port && e.code === 'EADDRINUSE') { console.warn(`[multisession] port ${port} busy, picking a free one`); listen(0); return; }
+    console.error('[multisession] listen failed', e);
+    process.exit(1);
+  };
+  server.once('error', onError);
+  server.listen(port, '127.0.0.1', () => {
+    server.off('error', onError);
+    const addr = server.address();
+    const actual = typeof addr === 'object' && addr ? addr.port : port;
+    console.log(`[multisession] http://127.0.0.1:${actual}`);
+    // Under Electron's utilityProcess the main process waits for this message to learn the port.
+    const parentPort = (process as unknown as { parentPort?: { postMessage(m: unknown): void } }).parentPort;
+    parentPort?.postMessage({ type: 'listening', port: actual });
+  });
 }
 main();

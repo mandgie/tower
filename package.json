@@ -3,18 +3,71 @@
   "version": "0.1.0",
   "private": true,
   "description": "Tower: one window for every Claude Code and Codex session, hosted in tmux",
+  "author": "Magnus Friberg",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "concurrently -k -n server,ui,electron -c blue,magenta,green \"npm:dev:server\" \"npm:dev:ui\" \"npm:dev:electron\"",
-    "dev:server": "cross-env ELECTRON_RUN_AS_NODE=1 electron node_modules/tsx/dist/cli.mjs watch server/index.ts",
+    "dev:server": "cross-env ELECTRON_RUN_AS_NODE=1 MS_PORT=4310 electron node_modules/tsx/dist/cli.mjs watch server/index.ts",
     "dev:ui": "vite --config ui/vite.config.ts",
     "dev:electron": "wait-on http://localhost:5173 && cross-env MS_DEV=1 electron .",
     "build": "npm run build:ui && npm run build:server",
     "build:ui": "vite build --config ui/vite.config.ts",
     "build:server": "esbuild server/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/server.cjs --external:node-pty",
-    "start": "npm run build && electron .",
-    "server": "tsx server/index.ts",
-    "postinstall": "electron-rebuild -f -w node-pty"
+    "start": "npm run build && cross-env MS_PORT=4310 electron .",
+    "server": "cross-env MS_PORT=4310 tsx server/index.ts",
+    "postinstall": "electron-rebuild -f -w node-pty",
+    "icon": "sh scripts/make-icon.sh",
+    "dist": "npm run build && cross-env NODE_OPTIONS=--experimental-require-module electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.mandgie.tower",
+    "productName": "Tower",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "ui/dist/**",
+      "electron/**",
+      "package.json",
+      "!**/*.map",
+      "!node_modules/node-pty/{src,deps,scripts,binding.gyp,build/Makefile,build/*.mk,build/Release/obj.target,build/Release/.deps}"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
+    "npmRebuild": false,
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "darkModeSupport": true,
+      "identity": "-",
+      "hardenedRuntime": false
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "contents": [
+        {
+          "x": 140,
+          "y": 200
+        },
+        {
+          "x": 420,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
   },
   "dependencies": {
     "node-pty": "^1.1.0",
@@ -33,6 +86,7 @@
     "concurrently": "^9.0.0",
     "cross-env": "^7.0.3",
     "electron": "^33.0.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.24.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
