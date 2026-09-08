@@ -54,6 +54,19 @@ export function TerminalPane({ tmux, active, agent }: { tmux: string; active: bo
     ws.onclose = () => setState('closed');
     ws.onerror = () => setState('closed');
     const onData = term.onData((d) => { if (ws.readyState === ws.OPEN) ws.send(d); });
+    // Shift+Enter: xterm.js sends a plain CR, indistinguishable from Enter. Send ESC CR
+    // (Meta+Enter) instead; tmux forwards it unchanged and Claude Code / Codex treat it as
+    // "insert newline" rather than "submit". Same sequence /terminal-setup installs for VS Code.
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.key === 'Enter' && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+        if (ev.type === 'keydown') {
+          ev.preventDefault(); // otherwise the browser still fires keypress and xterm sends a bare CR too
+          if (ws.readyState === ws.OPEN) ws.send('\x1b\r');
+        }
+        return false;
+      }
+      return true;
+    });
     const onBinary = term.onBinary((d) => { if (ws.readyState === ws.OPEN) ws.send(Uint8Array.from(d, (c) => c.charCodeAt(0))); });
     const onResize = term.onResize(({ cols, rows }) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
 
