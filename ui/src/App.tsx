@@ -11,7 +11,7 @@ import { Doctor } from './components/Doctor';
 import { WorkspaceBar, isAutoName, PaneGrid, gridColumns, type Workspace, type Pane } from './components/Workspace';
 
 declare global {
-  interface Window { multisession?: { onCommand: (cb: (cmd: string) => void) => () => void } }
+  interface Window { multisession?: { onCommand: (cb: (cmd: string) => void) => () => void; openExternal?: (url: string) => Promise<boolean> } }
 }
 
 const WS_KEY = 'ms.workspaces';

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell, utilityProcess, nativeImage, screen, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, utilityProcess, nativeImage, screen, dialog, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -110,13 +110,35 @@ function createWindow() {
   if (state?.maximized) win.maximize();
   if (state?.fullScreen) win.setFullScreen(true);
   win.loadURL(appUrl());
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  // Links from the UI (xterm web-links / OSC 8) go to the default browser. xterm's stock handler
+  // calls window.open() with no URL, which shows up here as about:blank and makes macOS complain
+  // that no app can open it, so anything that is not a real external URL is dropped.
+  win.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (e, url) => { if (url !== appUrl() && !url.startsWith(appUrl())) { e.preventDefault(); openExternal(url); } });
   win.on('resize', scheduleSave);
   win.on('move', scheduleSave);
   win.on('close', () => { clearTimeout(saveTimer); saveWindowState(); });
   win.on('closed', () => { win = null; });
   win.once('ready-to-show', scheduleSave);
 }
+
+const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+
+/** Open http(s)/mailto in the default browser and file:// in the default app. Anything else is ignored. */
+function openExternal(raw) {
+  let url;
+  try { url = new URL(String(raw)); } catch { return false; }
+  if (EXTERNAL_SCHEMES.has(url.protocol)) { shell.openExternal(url.href).catch((e) => console.warn('[open] failed', url.href, e.message)); return true; }
+  if (url.protocol === 'file:') {
+    // Claude Code emits file links, sometimes with a trailing :line(:col) that is not part of the path.
+    let p = decodeURIComponent(url.pathname).replace(/:\d+(?::\d+)?$/, '');
+    if (!fs.existsSync(p)) return false;
+    shell.openPath(p).then((err) => { if (err) console.warn('[open] failed', p, err); });
+    return true;
+  }
+  return false;
+}
+ipcMain.handle('open-external', (_e, url) => openExternal(url));
 
 function showWindow() {
   if (!win) { createWindow(); return; }

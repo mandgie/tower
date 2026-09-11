@@ -5,6 +5,13 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { Agent } from '../../../shared/types';
 import { wsUrl } from '../api';
 
+/** Hand a clicked link to Electron (default browser). Outside Electron fall back to a new tab. */
+function openLink(uri: string) {
+  const bridge = window.multisession;
+  if (bridge?.openExternal) { void bridge.openExternal(uri); return; }
+  window.open(uri, '_blank', 'noopener');
+}
+
 const THEME = {
   background: '#0F1418',
   foreground: '#E6ECF1',
@@ -35,10 +42,14 @@ export function TerminalPane({ tmux, active, agent }: { tmux: string; active: bo
       allowProposedApi: true,
       macOptionIsMeta: true,
       allowTransparency: false,
+      // OSC 8 hyperlinks (Claude Code / Codex emit these for files and URLs).
+      linkHandler: { activate: (_e, uri) => openLink(uri) },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon());
+    // Plain http(s) URLs in the output. The addon's default handler does window.open() with no
+    // URL and then sets location, which Electron sees as about:blank and cannot open.
+    term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri)));
     term.open(host);
     termRef.current = term; fitRef.current = fit;
     fit.fit();
