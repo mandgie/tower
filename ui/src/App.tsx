@@ -147,6 +147,14 @@ export function App() {
   }, [openTerminal]);
 
   const removePane = useCallback((tmux: string) => {
+    // The pane that inherits focus and selection: the next one in the same workspace, else the previous.
+    const home = workspaces.find((w) => w.panes.some((p) => p.tmux === tmux));
+    let heir: string | null = null;
+    if (home) {
+      const i = home.panes.findIndex((p) => p.tmux === tmux);
+      const rest = home.panes.filter((p) => p.tmux !== tmux);
+      heir = rest[Math.min(i, rest.length - 1)]?.tmux ?? null;
+    }
     updateWs((ws, id) => {
       const list = ws.map((w) => (w.panes.some((p) => p.tmux === tmux) ? { ...w, panes: w.panes.filter((p) => p.tmux !== tmux), maximized: w.maximized === tmux ? null : w.maximized } : w));
       // Auto-delete a workspace that just lost its last pane, unless it is the only one.
@@ -154,12 +162,21 @@ export function App() {
       const kept = list.length > 1 ? list.filter((w) => !emptied.includes(w)) : list;
       return { workspaces: kept, activeId: kept.some((w) => w.id === id) ? id : kept[0]?.id };
     });
-    setFocused((f) => (f === tmux ? null : f));
-  }, [updateWs]);
+    setFocused((f) => (f === tmux ? heir : f));
+    // Never leave the removed session selected: once the snapshot marks it ended, a selected
+    // non-live session switches the whole window to its transcript with a Resume button.
+    setSelectedKey((k) => {
+      const cur = k ? byKey.get(k) : undefined;
+      if (cur && cur.live?.kind === 'tmux' && cur.live.tmux !== tmux) return k;
+      const s = heir ? byTmux.get(heir) : undefined;
+      return s ? s.key : null;
+    });
+  }, [updateWs, workspaces, byKey, byTmux]);
 
   const killPane = useCallback(async (tmux: string) => {
-    try { await api.kill(tmux); } catch (e) { setError((e as Error).message); }
+    // Drop the pane first so the grid reflows immediately; the kill itself can take a moment.
     removePane(tmux);
+    try { await api.kill(tmux); } catch (e) { setError((e as Error).message); }
   }, [removePane]);
 
   const swapPanes = useCallback((a: string, b: string) => {
