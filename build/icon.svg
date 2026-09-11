@@ -1,43 +1,114 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- Tower app icon: amber control tower on ink, mint window band. -->
+  <!--
+    Tower app icon.
+    A bold "T" that is also a control tower: the crossbar is the cab with a lit mint
+    window band and a beacon on top, the stem is the tapered shaft down to a plinth.
+    Palette matches the app: ink background, amber mark, mint accents.
+  -->
   <defs>
+    <!-- background: ink with a slightly lighter top so the tile reads as a surface -->
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1B222A"/>
-      <stop offset="1" stop-color="#0E1216"/>
+      <stop offset="0" stop-color="#2A333D"/>
+      <stop offset="0.55" stop-color="#151B21"/>
+      <stop offset="1" stop-color="#0B0F13"/>
     </linearGradient>
-    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#F7B872"/>
-      <stop offset="0.5" stop-color="#F2A65A"/>
-      <stop offset="1" stop-color="#D98B3F"/>
+    <!-- thin rim highlight along the top edge of the tile -->
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.35" stop-color="#FFFFFF" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#7FE0C8" stop-opacity="0.45"/>
+    <!-- amber body: light on top, deeper at the bottom -->
+    <linearGradient id="amber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFC98A"/>
+      <stop offset="0.45" stop-color="#F2A65A"/>
+      <stop offset="1" stop-color="#C97A34"/>
+    </linearGradient>
+    <!-- side shading across the mark so it reads as a solid object -->
+    <linearGradient id="shade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.22"/>
+    </linearGradient>
+    <!-- mint window band -->
+    <linearGradient id="mint" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#B4F3E3"/>
+      <stop offset="1" stop-color="#5FD1B6"/>
+    </linearGradient>
+    <!-- ambient glows -->
+    <radialGradient id="glowMint" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7FE0C8" stop-opacity="0.34"/>
       <stop offset="1" stop-color="#7FE0C8" stop-opacity="0"/>
     </radialGradient>
+    <radialGradient id="glowAmber" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#F2A65A" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#F2A65A" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="22"/>
+      <feOffset dy="26" result="b"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.55"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="186"/></clipPath>
+    <!-- the whole T as one shape, reused for fill, shading and shadow -->
+    <path id="mark" d="
+      M 296 300
+      Q 296 268 328 268
+      L 696 268
+      Q 728 268 728 300
+      L 728 430
+      Q 728 462 696 462
+      L 588 462
+      L 604 716
+      L 420 716
+      L 436 462
+      L 328 462
+      Q 296 462 296 430
+      Z"/>
   </defs>
 
-  <!-- macOS icon grid: 824px rounded square centred on a 1024 canvas -->
+  <!-- tile -->
   <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
-  <rect x="100" y="100" width="824" height="824" rx="186" fill="none" stroke="#12171D" stroke-width="2"/>
+  <g clip-path="url(#tile)">
+    <!-- mint halo behind the cab, amber floor light under the base -->
+    <ellipse cx="512" cy="360" rx="360" ry="200" fill="url(#glowMint)"/>
+    <ellipse cx="512" cy="790" rx="330" ry="120" fill="url(#glowAmber)"/>
+    <!-- faint horizon line the tower stands on -->
+    <rect x="100" y="774" width="824" height="2" fill="#FFFFFF" fill-opacity="0.06"/>
+  </g>
+  <rect x="103" y="103" width="818" height="818" rx="184" fill="none" stroke="url(#rim)" stroke-width="6"/>
 
-  <!-- soft mint glow behind the cab -->
-  <ellipse cx="512" cy="380" rx="330" ry="150" fill="url(#glow)"/>
+  <!-- plinth -->
+  <g filter="url(#shadow)">
+    <rect x="372" y="720" width="280" height="58" rx="16" fill="url(#amber)"/>
+    <rect x="372" y="720" width="280" height="58" rx="16" fill="url(#shade)"/>
+  </g>
 
-  <!-- base -->
-  <rect x="352" y="748" width="320" height="52" rx="14" fill="url(#amber)"/>
-  <!-- shaft, tapered -->
-  <polygon points="434,748 590,748 562,460 462,460" fill="url(#amber)"/>
-  <!-- cab: inverted trapezoid -->
-  <polygon points="296,318 728,318 656,468 368,468" fill="url(#amber)"/>
-  <!-- roof cap -->
-  <rect x="318" y="270" width="388" height="56" rx="16" fill="url(#amber)"/>
-  <!-- window band (mint) -->
-  <polygon points="332,346 692,346 662,410 362,410" fill="#7FE0C8"/>
+  <!-- the T / tower -->
+  <g filter="url(#shadow)">
+    <use href="#mark" fill="url(#amber)"/>
+    <use href="#mark" fill="url(#shade)"/>
+    <!-- crisp light edge along the top of the cab -->
+    <path d="M 328 268 L 696 268 Q 728 268 728 300 L 728 306 Q 728 274 696 274 L 328 274 Q 296 274 296 306 L 296 300 Q 296 268 328 268 Z" fill="#FFFFFF" fill-opacity="0.35"/>
+  </g>
+
+  <!-- window band with glow -->
+  <rect x="330" y="322" width="364" height="86" rx="18" fill="#7FE0C8" fill-opacity="0.55" filter="url(#soft)"/>
+  <rect x="330" y="322" width="364" height="86" rx="18" fill="url(#mint)"/>
   <!-- mullions in ink so the band reads as windows -->
-  <rect x="424" y="346" width="18" height="64" fill="#12171D"/>
-  <rect x="503" y="346" width="18" height="64" fill="#12171D"/>
-  <rect x="582" y="346" width="18" height="64" fill="#12171D"/>
+  <rect x="418" y="322" width="16" height="86" fill="#151B21"/>
+  <rect x="504" y="322" width="16" height="86" fill="#151B21"/>
+  <rect x="590" y="322" width="16" height="86" fill="#151B21"/>
+  <!-- glass highlight -->
+  <rect x="330" y="322" width="364" height="30" rx="14" fill="#FFFFFF" fill-opacity="0.18"/>
+
   <!-- antenna and beacon -->
-  <rect x="504" y="196" width="16" height="80" fill="url(#amber)"/>
-  <circle cx="512" cy="188" r="22" fill="#7FE0C8"/>
+  <rect x="502" y="206" width="20" height="62" rx="4" fill="url(#amber)"/>
+  <circle cx="512" cy="196" r="34" fill="#7FE0C8" fill-opacity="0.45" filter="url(#soft)"/>
+  <circle cx="512" cy="196" r="20" fill="url(#mint)"/>
+  <circle cx="506" cy="190" r="7" fill="#FFFFFF" fill-opacity="0.6"/>
 </svg>
