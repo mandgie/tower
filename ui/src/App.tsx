@@ -21,6 +21,9 @@ const SIDEBAR_KEY = 'ms.sidebar';
 
 const newId = () => Math.random().toString(36).slice(2, 10);
 
+/** Session key for a tmux name (`ms-claude-<id>` -> `claude:<id>`), for sessions that are no longer in the snapshot's live map. */
+const keyOfTmux = (tmux: string) => tmux.replace(/^ms-(claude|codex)-/, '$1:');
+
 function loadWorkspaces(): { workspaces: Workspace[]; activeId: string } {
   try {
     const raw = localStorage.getItem(WS_KEY);
@@ -86,23 +89,32 @@ export function App() {
     });
   }, []);
 
-  // Reconcile after a Codex launch gets renamed to its real thread id, and drop panes whose tmux session is gone.
+  // Follow panes whose tmux session was renamed (a Claude process moved to a new session id after
+  // /clear, or a Codex launch learned its thread id), and drop panes whose tmux session is gone.
   useEffect(() => {
     if (!snapshot) return;
     const liveNames = new Set(byTmux.keys());
     const cutoff = Date.now() - 6000;
     let changed = false;
     let focusMoved: string | null | undefined;
+    let selectedMoved: string | null | undefined;
     const inPanes = new Set(workspaces.flatMap((w) => w.panes.map((p) => p.tmux)));
+    const renamed = snapshot.renamed ?? {};
     const next = workspaces.map((w) => {
       const panes = w.panes.map((p) => {
         if (liveNames.has(p.tmux)) return p;
-        const candidates = [...liveNames].filter((n) => !inPanes.has(n) && n.startsWith(`ms-${p.agent}-`));
-        // The pane was renamed (Codex id resolved, or a Claude process moved to a new session id).
-        if (candidates.length === 1) {
-          changed = true; inPanes.add(candidates[0]);
-          if (focused === p.tmux) focusMoved = candidates[0];
-          return { ...p, tmux: candidates[0] };
+        // The server records every rename it made. Fall back to the one unclaimed live session of the
+        // same agent, which covers a rename the server no longer remembers.
+        let target = renamed[p.tmux];
+        if (!target || !liveNames.has(target) || inPanes.has(target)) {
+          const candidates = [...liveNames].filter((n) => !inPanes.has(n) && n.startsWith(`ms-${p.agent}-`));
+          target = candidates.length === 1 ? candidates[0] : '';
+        }
+        if (target) {
+          changed = true; inPanes.add(target);
+          if (focused === p.tmux) focusMoved = target;
+          if (selectedKey && selectedKey === keyOfTmux(p.tmux)) selectedMoved = byTmux.get(target)?.key ?? null;
+          return { ...p, tmux: target };
         }
         return p;
       }).filter((p) => {
@@ -120,6 +132,7 @@ export function App() {
     if (changed) {
       updateWs(() => ({ workspaces: pruned }));
       if (focusMoved !== undefined) setFocused(focusMoved);
+      if (selectedMoved !== undefined) setSelectedKey(selectedMoved);
     }
   }, [snapshot]); // eslint-disable-line react-hooks/exhaustive-deps
 

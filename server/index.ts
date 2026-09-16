@@ -18,7 +18,7 @@ const UI_DIST = path.resolve(here, '..', 'ui', 'dist');
 
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.png': 'image/png', '.json': 'application/json' };
 
-let snapshot: Snapshot = { generatedAt: 0, sessions: [], projects: [], pending: [] };
+let snapshot: Snapshot = { generatedAt: 0, sessions: [], projects: [], pending: [], renamed: {} };
 let snapshotJson = '';
 const eventClients = new Set<WebSocket>();
 let refreshing = false;

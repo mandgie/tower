@@ -49,6 +49,7 @@ export interface Snapshot {
   sessions: Session[];
   projects: Project[];
   pending: PendingLaunch[];
+  renamed: Record<string, string>;  // old tmux name -> current name, for panes that moved
 }
 
 export interface PendingLaunch {

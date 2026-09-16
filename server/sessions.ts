@@ -19,6 +19,34 @@ function savePending(): void {
   fs.writeFile(PENDING_FILE, JSON.stringify([...pending.values()]), () => {});
 }
 
+/**
+ * Old tmux name -> the name that pane carries now. A pane gets renamed when Claude moves to a new
+ * session id (/clear) or a Codex launch learns its thread id; the UI follows its panes through this
+ * map instead of guessing. Persisted so a server restart does not orphan open panes.
+ */
+const RENAMES_FILE = path.join(APP_DIR, 'renames.json');
+const renames = new Map<string, string>();
+try { for (const [from, to] of Object.entries(JSON.parse(fs.readFileSync(RENAMES_FILE, 'utf8')) as Record<string, string>)) renames.set(from, to); } catch { /* none */ }
+function saveRenames(): void {
+  fs.writeFile(RENAMES_FILE, JSON.stringify(Object.fromEntries(renames)), () => {});
+}
+
+async function rename(from: string, to: string): Promise<void> {
+  await renameSession(from, to);
+  // Keep every entry pointing at the current name, so a pane renamed twice resolves in one step.
+  for (const [k, v] of renames) if (v === from) renames.set(k, to);
+  renames.set(from, to);
+  saveRenames();
+}
+
+/** Forget renames whose target is gone; nothing can follow them any more. */
+function pruneRenames(panes: TmuxPane[]): void {
+  const alive = new Set(panes.map((p) => p.session));
+  let changed = false;
+  for (const [k, v] of renames) if (!alive.has(v) || alive.has(k)) { renames.delete(k); changed = true; }
+  if (changed) saveRenames();
+}
+
 function tmuxName(agent: Agent, id: string): string {
   return `ms-${agent}-${id}`;
 }
@@ -40,6 +68,7 @@ export async function buildSnapshot(): Promise<Snapshot> {
   await resolvePendingCodex(codex, panes);
 
   const paneRegistry = await reconcilePaneNames(panes, liveClaude);
+  pruneRenames(panes);
   const paneForKey = new Map<string, TmuxPane>();
   const attachedPanes = new Set<string>();
   for (const p of panes) {
@@ -119,7 +148,7 @@ export async function buildSnapshot(): Promise<Snapshot> {
   }
   const projects = [...projMap.values()].sort((a, b) => b.updatedAt - a.updatedAt);
 
-  return { generatedAt: now, sessions, projects, pending: [...pending.values()] };
+  return { generatedAt: now, sessions, projects, pending: [...pending.values()], renamed: Object.fromEntries(renames) };
 }
 
 /**
@@ -141,7 +170,7 @@ async function reconcilePaneNames(panes: TmuxPane[], liveClaude: Map<string, Cla
     if (reg.sessionId !== parsed.id) {
       const target = tmuxName('claude', reg.sessionId);
       if (!names.has(target)) {
-        await renameSession(p.session, target);
+        await rename(p.session, target);
         names.delete(p.session); names.add(target);
         p.session = target;
       }
@@ -161,7 +190,7 @@ async function resolvePendingCodex(codex: Session[], panes: TmuxPane[]): Promise
       .filter((s) => s.cwd === p.cwd && s.createdAt >= p.startedAt - 2000 && !taken.has(tmuxName('codex', s.id)))
       .sort((a, b) => a.createdAt - b.createdAt);
     if (candidates.length) {
-      await renameSession(tmux, tmuxName('codex', candidates[0].id));
+      await rename(tmux, tmuxName('codex', candidates[0].id));
       pending.delete(tmux);
       savePending();
     }
