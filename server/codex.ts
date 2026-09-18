@@ -4,7 +4,7 @@ import readline from 'node:readline';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CODEX_DIR, projectName } from './config.js';
-import type { Session, Message, Block, SessionStats } from '../shared/types.js';
+import type { Session, Message, Block, SessionStats, SessionContext } from '../shared/types.js';
 import { newStats, trackTime } from './claude.js';
 
 const execFileP = promisify(execFile);
@@ -83,6 +83,41 @@ export async function scanCodexSessions(): Promise<Session[]> {
   return toSessions(rowsCache.rows);
 }
 
+const CTX_TAIL_BYTES = 192 * 1024;
+const ctxCache = new Map<string, { size: number; mtimeMs: number; context?: SessionContext }>();
+
+/** Last token_count event in the rollout tail. Codex reports the real window, so nothing is estimated. */
+function rolloutContext(file: string | null | undefined): SessionContext | undefined {
+  if (!file) return undefined;
+  let st: fs.Stats;
+  try { st = fs.statSync(file); } catch { return undefined; }
+  const hit = ctxCache.get(file);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.context;
+  let context = hit?.context; // keep the previous reading if the tail has no token_count line
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const len = Math.min(st.size, CTX_TAIL_BYTES);
+      const buf = Buffer.alloc(len);
+      const n = fs.readSync(fd, buf, 0, len, st.size - len);
+      const lines = buf.subarray(0, n).toString('utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].includes('"token_count"')) continue;
+        let r: any;
+        try { r = JSON.parse(lines[i]); } catch { continue; }
+        const info = r.payload?.info;
+        if (r.type !== 'event_msg' || r.payload?.type !== 'token_count' || !info) continue;
+        const last = info.last_token_usage || {};
+        const tokens = (last.input_tokens || 0) + (last.output_tokens || 0);
+        if (tokens > 0 && info.model_context_window) context = { tokens, window: info.model_context_window, estimated: false };
+        break;
+      }
+    } finally { fs.closeSync(fd); }
+  } catch { /* unreadable rollout */ }
+  ctxCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, context });
+  return context;
+}
+
 function toSessions(rows: ThreadRow[]): Session[] {
   const imports = codexImports();
   return rows.filter((r) => r.cwd).map((r) => {
@@ -106,6 +141,7 @@ function toSessions(rows: ThreadRow[]): Session[] {
       importedFrom: imp ? { agent: 'claude' as const, id: imp } : undefined,
       archived: !!r.archived,
       status: 'idle' as const,
+      context: r.archived ? undefined : rolloutContext(r.rollout_path),
     };
   });
 }

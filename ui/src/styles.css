@@ -176,6 +176,15 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .pane-project { font-weight: 600; color: var(--fog); flex: 0 0 auto; }
 .pane-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .pane-status { font-family: var(--font-mono); font-size: 10.5px; flex: 0 0 auto; }
+.ctx { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--mist); white-space: nowrap; }
+.ctx-bar { width: 40px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.ctx-fill { display: block; height: 100%; border-radius: 2px; background: var(--mist); transition: width 300ms; }
+.agent-claude .ctx.low .ctx-fill { background: var(--claude); }
+.agent-codex .ctx.low .ctx-fill { background: var(--codex); }
+.ctx.mid .ctx-fill { background: var(--wait); }
+.ctx.high .ctx-fill { background: var(--danger); }
+.ctx.high .ctx-text { color: var(--danger); }
+.head-meta .ctx { font-size: 11px; }
 .pane.status-waiting .pane-status { color: var(--wait); }
 .pane-actions { display: flex; gap: 2px; flex: 0 0 auto; opacity: 0.55; transition: opacity 100ms; }
 .pane:hover .pane-actions, .pane.focused .pane-actions { opacity: 1; }

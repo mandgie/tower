@@ -2,6 +2,7 @@ import { useEffect, useState, type DragEvent } from 'react';
 import type { Agent, Session, Status } from '../../../shared/types';
 import { TerminalPane } from './Terminal';
 import { statusWord } from './StatusStrip';
+import { ContextBadge } from './ContextBadge';
 
 export interface Pane { tmux: string; agent: Agent; openedAt?: number }
 /** `auto` marks a generated name that gets replaced by the first session's project. Renaming clears it. */
@@ -114,6 +115,7 @@ function PaneView({ pane, session: s, focused, hidden, maximized, dragging, over
         <span className="dot" />
         <span className="pane-project">{s?.project ?? pane.tmux.replace(/^ms-\w+-/, '')}</span>
         <span className="pane-title">{s?.title ?? ''}</span>
+        {s && <ContextBadge session={s} />}
         <span className="pane-status">{statusWord(status)}</span>
         <span className="pane-actions">
           <button title={maximized ? 'Restore grid (Esc)' : 'Maximize (⌘⇧⏎)'} onClick={(e) => { e.stopPropagation(); onMaximize(); }}>{maximized ? '⤡' : '⤢'}</button>

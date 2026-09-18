@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Session, Message, Block, SessionStats } from '../../../shared/types';
 import { api } from '../api';
+import { fmtTokens, contextLevel } from './ContextBadge';
 
 const PAGE = 300;
 
@@ -60,11 +61,6 @@ export function Transcript({ session }: { session: Session }) {
   );
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (n >= 1000) return `${Math.round(n / 1000)}k`;
-  return String(n);
-}
 function fmtDuration(ms: number): string {
   const m = Math.round(ms / 60000);
   if (m < 1) return 'under a minute';
@@ -86,7 +82,7 @@ function StatsStrip({ stats, agent }: { stats: SessionStats; agent: Session['age
   const ctx = stats.contextTokens;
   const win = stats.contextWindow;
   const pct = ctx && win ? Math.min(100, Math.round((ctx / win) * 100)) : null;
-  const level = pct == null ? '' : pct >= 80 ? 'high' : pct >= 50 ? 'mid' : 'low';
+  const level = pct == null ? '' : contextLevel(pct);
   const facts: { label: string; value: string; title?: string }[] = [];
   facts.push({ label: 'turns', value: String(stats.turns), title: 'Prompts you sent' });
   facts.push({ label: 'tool calls', value: String(stats.toolCalls) });

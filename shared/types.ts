@@ -34,6 +34,13 @@ export interface Session {
   live?: LiveTmux | LiveExternal;
   status: Status;
   agentName?: string;  // claude's own session name (e.g. fpl-72)
+  context?: SessionContext;  // context window fill after the last turn, from the transcript tail
+}
+
+export interface SessionContext {
+  tokens: number;      // tokens the model saw on its last call
+  window: number;      // model context window
+  estimated: boolean;  // window guessed from the model name (Claude) rather than reported (Codex)
 }
 
 export interface Project {

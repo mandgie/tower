@@ -20,17 +20,23 @@ interface Meta {
   gitBranch?: string;
   version?: string;
   lastRole?: string;
+  contextTokens?: number;
 }
 interface CacheEntry { size: number; mtimeMs: number; meta: Meta | null }
 
+/** Bump when Meta gains a field, so entries cached by size+mtime get re-extracted instead of missing it forever. */
+const CACHE_VERSION = 2;
 let cache: Record<string, CacheEntry> = {};
-try { cache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); } catch { /* fresh */ }
+try {
+  const j = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+  if (j && j.v === CACHE_VERSION && j.entries) cache = j.entries;
+} catch { /* fresh */ }
 let cacheDirty = false;
 let lastCacheWrite = 0;
 
 function flushCache() {
   if (!cacheDirty || Date.now() - lastCacheWrite < 5000) return;
-  fs.writeFile(CACHE_FILE, JSON.stringify(cache), () => {});
+  fs.writeFile(CACHE_FILE, JSON.stringify({ v: CACHE_VERSION, entries: cache }), () => {});
   cacheDirty = false;
   lastCacheWrite = Date.now();
 }
@@ -79,6 +85,11 @@ function parseLines(text: string, dropFirst: boolean): any[] {
   return out;
 }
 
+/** What the model saw on this call: fresh input plus everything served from the prompt cache. */
+export function contextTokensOf(usage: any): number {
+  return (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+}
+
 function extractMeta(file: string, size: number): Meta | null {
   const fd = fs.openSync(file, 'r');
   try {
@@ -111,6 +122,10 @@ function extractMeta(file: string, size: number): Meta | null {
       if (r.type === 'user' || r.type === 'assistant') meta.lastRole = r.type;
       if (!meta.firstPrompt && isRealPrompt(r)) meta.firstPrompt = cleanPrompt(userText(r.message.content)!);
       if (r.type === 'assistant' && r.message?.model) meta.model = r.message.model;
+      if (r.type === 'assistant' && !r.isSidechain && r.message?.usage) {
+        const t = contextTokensOf(r.message.usage);
+        if (t > 0) meta.contextTokens = t;
+      }
       if (r.gitBranch) meta.gitBranch = r.gitBranch;
       if (r.version) meta.version = r.version;
     }
@@ -170,6 +185,8 @@ export function scanClaudeSessions(): Session[] {
       if (!entry || entry.size !== st.size || entry.mtimeMs !== st.mtimeMs) {
         let meta: Meta | null = null;
         try { meta = extractMeta(file, st.size); } catch (e) { meta = null; }
+        // A tool result bigger than the tail window hides the last usage record; keep the previous reading rather than blanking it.
+        if (meta && meta.contextTokens == null && entry?.meta?.contextTokens != null) meta.contextTokens = entry.meta.contextTokens;
         entry = { size: st.size, mtimeMs: st.mtimeMs, meta };
         cache[file] = entry;
         cacheDirty = true;
@@ -192,6 +209,7 @@ export function scanClaudeSessions(): Session[] {
         version: m.version,
         transcriptPath: file,
         status: 'idle',
+        context: m.contextTokens != null ? { tokens: m.contextTokens, window: claudeContextWindow(m.model), estimated: true } : undefined,
       });
     }
   }
@@ -293,7 +311,7 @@ export async function claudeTranscript(file: string): Promise<{ messages: Messag
   }
   stats.filesTouched = files.size;
   if (lastUsage) {
-    stats.contextTokens = (lastUsage.input_tokens || 0) + (lastUsage.cache_creation_input_tokens || 0) + (lastUsage.cache_read_input_tokens || 0);
+    stats.contextTokens = contextTokensOf(lastUsage);
     stats.contextWindow = claudeContextWindow(model);
     stats.contextEstimated = true;
   }
