@@ -57,6 +57,13 @@ export interface Snapshot {
   projects: Project[];
   pending: PendingLaunch[];
   renamed: Record<string, string>;  // old tmux name -> current name, for panes that moved
+  workspaces?: WorkspaceSummary[];  // the Mac's workspaces, mirrored for the phone
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  panes: string[];     // tmux names, in grid order
 }
 
 export interface PendingLaunch {
@@ -83,6 +90,28 @@ export interface Settings {
   codexArgs: string[];
   showImported: boolean;
   extraProjectDirs: string[];
+  remoteEnabled: boolean;
+  remotePort: number;
+  remoteAllowLan: boolean;       // also accept private LAN addresses, not only Tailscale
+  trustFolders: boolean;         // mark a folder trusted for Claude before launching there, so it never asks
+}
+
+export interface RemoteUrl {
+  kind: 'tailscale' | 'lan';
+  label: string;
+  url: string;
+  pairUrl: string;               // url + /pair?t=<token>; opening it pairs the device
+  qrSvg: string;
+}
+
+export interface RemoteInfo {
+  enabled: boolean;
+  listening: boolean;
+  port: number;
+  error: string;
+  tailscale: boolean;            // this Mac has a Tailscale address
+  urls: RemoteUrl[];
+  connected: number;             // remote devices with the app open right now
 }
 
 export interface SessionStats {

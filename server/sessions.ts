@@ -7,6 +7,7 @@ import { listPanes, createSession, hasSession, renameSession, killSession, paneD
 import { loadSettings } from './settings.js';
 import { projectName, HOME, APP_DIR } from './config.js';
 import { shQuote } from './shell.js';
+import { trustFolder } from './trust.js';
 import type { Session, Project, Snapshot, Agent, PendingLaunch } from '../shared/types.js';
 
 const WORKING_WINDOW_MS = 8000;
@@ -224,6 +225,7 @@ export async function launchNew(o: LaunchOptions): Promise<{ tmux: string; key?:
   o.cwd = o.cwd.replace(/^~(?=\/|$)/, HOME);
   if (!fs.existsSync(o.cwd)) throw new Error(`Folder does not exist: ${o.cwd}`);
   if (o.agent === 'claude') {
+    if (settings.trustFolders) await trustFolder(o.cwd);
     const id = randomUUID();
     const name = tmuxName('claude', id);
     const parts = ['claude', '--session-id', id, ...claudeArgs(settings, o)];
@@ -255,6 +257,7 @@ export async function resumeSession(s: Session, o: { skipPermissions?: boolean; 
   } else if (await hasSession(name)) return { tmux: name };
   const cwd = fs.existsSync(s.cwd) ? s.cwd : HOME;
   if (s.agent === 'claude') {
+    if (settings.trustFolders) await trustFolder(cwd);
     const parts = ['claude', '--resume', s.id, ...claudeArgs(settings, { agent: 'claude', cwd, skipPermissions: o.skipPermissions })];
     if (o.fork) parts.push('--fork-session');
     await createSession(name, cwd, parts.join(' '));

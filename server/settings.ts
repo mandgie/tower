@@ -10,6 +10,10 @@ const DEFAULTS: Settings = {
   codexArgs: [],
   showImported: false,
   extraProjectDirs: [],
+  remoteEnabled: false,
+  remotePort: 4311,
+  remoteAllowLan: false,
+  trustFolders: true,
 };
 
 export function loadSettings(): Settings {

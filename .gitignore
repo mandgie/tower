@@ -7,3 +7,4 @@ release
 build/icon.iconset
 build/*.png
 .claude/
+promo/out/

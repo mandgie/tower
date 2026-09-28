@@ -11,7 +11,7 @@ import { Doctor } from './components/Doctor';
 import { WorkspaceBar, isAutoName, PaneGrid, gridColumns, type Workspace, type Pane } from './components/Workspace';
 
 declare global {
-  interface Window { multisession?: { onCommand: (cb: (cmd: string) => void) => () => void; openExternal?: (url: string) => Promise<boolean> } }
+  interface Window { multisession?: { onCommand: (cb: (cmd: string) => void) => () => void; openExternal?: (url: string) => Promise<boolean>; pathForFile?: (file: File) => string } }
 }
 
 const WS_KEY = 'ms.workspaces';
@@ -62,6 +62,12 @@ export function App() {
 
   useEffect(() => { localStorage.setItem(WS_KEY, JSON.stringify({ workspaces, activeId })); }, [workspaces, activeId]);
   useEffect(() => { localStorage.setItem(VIEW_KEY, view); }, [view]);
+  // Mirror the workspaces to the server so the phone can filter by them. Only names and pane order matter.
+  const wsMirror = JSON.stringify(workspaces.map((w) => ({ id: w.id, name: w.name, panes: w.panes.map((p) => p.tmux) })));
+  useEffect(() => {
+    const t = setTimeout(() => { api.saveWorkspaces(JSON.parse(wsMirror)).catch(() => {}); }, 400);
+    return () => clearTimeout(t);
+  }, [wsMirror]);
 
   // First-run setup check: open the doctor when a required tool (or every agent CLI) is missing.
   useEffect(() => {

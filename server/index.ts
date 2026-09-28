@@ -7,20 +7,25 @@ import { PORT } from './config.js';
 import { buildSnapshot, launchNew, resumeSession, closeTmux, listProjectDirs } from './sessions.js';
 import { claudeTranscript } from './claude.js';
 import { codexTranscript } from './codex.js';
-import { ensureServer, capturePane, sendKeys } from './tmux.js';
+import { ensureServer, capturePane, sendKeys, pressKeys, paneModes, scrollPane } from './tmux.js';
 import { attachTerminal } from './pty.js';
 import { loadSettings, saveSettings } from './settings.js';
+import { loadWorkspaces, saveWorkspaces } from './workspaces.js';
 import { runDoctor, doctorSummary } from './doctor.js';
+import { applyRemote, remoteInfo, rotateToken, isPaired, isLoopback, peerAllowed, originMatchesHost, handlePair, unpairedPage } from './remote.js';
 import type { Snapshot } from '../shared/types.js';
 
 const here = typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 const UI_DIST = path.resolve(here, '..', 'ui', 'dist');
 
-const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.png': 'image/png', '.json': 'application/json' };
+const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
 let snapshot: Snapshot = { generatedAt: 0, sessions: [], projects: [], pending: [], renamed: {} };
 let snapshotJson = '';
 const eventClients = new Set<WebSocket>();
+/** Remote status feeds (one per open device) and every remote socket, so unpairing can cut them all. */
+const remoteClients = new Set<WebSocket>();
+const remoteSockets = new Set<WebSocket>();
 let refreshing = false;
 let refreshQueued = false;
 
@@ -29,6 +34,7 @@ async function refresh(): Promise<Snapshot> {
   refreshing = true;
   try {
     const next = await buildSnapshot();
+    next.workspaces = loadWorkspaces();
     const json = JSON.stringify(next);
     // Compare without the timestamp so unchanged state does not spam clients.
     const strip = (s: Snapshot) => JSON.stringify({ ...s, generatedAt: 0 });
@@ -45,7 +51,7 @@ async function refresh(): Promise<Snapshot> {
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   res.end(typeof body === 'string' ? body : JSON.stringify(body));
 }
 
@@ -56,14 +62,36 @@ async function readBody(req: http.IncomingMessage): Promise<any> {
   return raw ? JSON.parse(raw) : {};
 }
 
-async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, remote: boolean): Promise<void> {
   const p = url.pathname;
   const m = req.method;
   try {
+    // Pairing is managed from the Mac only; a paired phone cannot read the token or mint a new one.
+    if (p.startsWith('/api/remote')) {
+      if (remote) return json(res, 403, { error: 'Only available on the Mac' });
+      if (m === 'GET' && p === '/api/remote') return json(res, 200, await remoteInfo(loadSettings(), remoteClients.size));
+      if (m === 'POST' && p === '/api/remote/rotate') {
+        rotateToken();
+        for (const c of remoteSockets) c.close(4001, 'unpaired');
+        return json(res, 200, await remoteInfo(loadSettings(), 0));
+      }
+    }
     if (m === 'GET' && p === '/api/sessions') return json(res, 200, snapshotJson || JSON.stringify(await refresh()));
     if (m === 'POST' && p === '/api/refresh') return json(res, 200, await refresh());
     if (m === 'GET' && p === '/api/settings') return json(res, 200, loadSettings());
-    if (m === 'PUT' && p === '/api/settings') { const s = saveSettings(await readBody(req)); refresh(); return json(res, 200, s); }
+    if (m === 'PUT' && p === '/api/settings') {
+      const s = saveSettings(await readBody(req));
+      refresh();
+      if (!remote) await applyRemote(s, () => createServer(true));
+      return json(res, 200, s);
+    }
+    if (m === 'PUT' && p === '/api/workspaces') {
+      // The Mac owns the workspaces; the phone only reads them from the snapshot.
+      if (remote) return json(res, 403, { error: 'Only available on the Mac' });
+      saveWorkspaces(await readBody(req));
+      refresh();
+      return json(res, 200, { ok: true });
+    }
     if (m === 'GET' && p === '/api/projects/dirs') return json(res, 200, { dirs: listProjectDirs() });
     if (m === 'GET' && p === '/api/doctor') return json(res, 200, await runDoctor());
 
@@ -90,12 +118,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       setTimeout(refresh, 300);
       return json(res, 200, r);
     }
-    mm = p.match(/^\/api\/tmux\/([^/]+)\/(kill|capture|send)$/);
+    mm = p.match(/^\/api\/tmux\/([^/]+)\/(kill|capture|send|keys|scroll)$/);
     if (mm) {
       const name = decodeURIComponent(mm[1]);
       if (mm[2] === 'kill' && m === 'POST') { await closeTmux(name); setTimeout(refresh, 200); return json(res, 200, { ok: true }); }
-      if (mm[2] === 'capture') return json(res, 200, { text: await capturePane(name, Number(url.searchParams.get('lines') || 60)) });
-      if (mm[2] === 'send' && m === 'POST') { const b = await readBody(req); await sendKeys(name, b.text || '', b.enter !== false); return json(res, 200, { ok: true }); }
+      if (mm[2] === 'capture') {
+        const modes = await paneModes(name);
+        return json(res, 200, { text: await capturePane(name, Number(url.searchParams.get('lines') || 60)), ...modes });
+      }
+      if (mm[2] === 'scroll' && m === 'POST') { const b = await readBody(req); await scrollPane(name, Number(b.lines) || 0); return json(res, 200, { ok: true }); }
+      if (mm[2] === 'send' && m === 'POST') { const b = await readBody(req); await sendKeys(name, String(b.text || ''), b.enter !== false); setTimeout(refresh, 300); return json(res, 200, { ok: true }); }
+      if (mm[2] === 'keys' && m === 'POST') { const b = await readBody(req); await pressKeys(name, Array.isArray(b.keys) ? b.keys.map(String) : []); setTimeout(refresh, 300); return json(res, 200, { ok: true }); }
     }
     json(res, 404, { error: 'Not found' });
   } catch (e) {
@@ -112,29 +145,83 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, url: U
   fs.createReadStream(file).pipe(res);
 }
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url || '/', 'http://localhost');
-  if (url.pathname.startsWith('/api/')) return void handleApi(req, res, url);
-  serveStatic(req, res, url);
-});
+/** The loopback listener only answers to loopback names, which defeats DNS rebinding. */
+function loopbackHost(host: string | undefined): boolean {
+  if (!host) return false;
+  const name = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return name === 'localhost' || isLoopback(name);
+}
+
+/** Browsers send Origin on WebSockets and writes; another site's page must not reach the terminals. */
+function originAllowed(req: http.IncomingMessage, remote: boolean): boolean {
+  if (remote) return originMatchesHost(req);
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try { return loopbackHost(new URL(origin).host); } catch { return false; }
+}
+
+/** Local requests must name a loopback host; remote ones need the pairing cookie. False means the request was already answered. */
+function gate(req: http.IncomingMessage, res: http.ServerResponse, url: URL, remote: boolean): boolean {
+  if (!remote) {
+    if (!loopbackHost(req.headers.host)) { res.writeHead(421); res.end(); return false; }
+  } else {
+    if (url.pathname === '/pair') { handlePair(req, res, url); return false; }
+    if (!isPaired(req)) {
+      if (url.pathname.startsWith('/api/')) json(res, 401, { error: 'Not paired' });
+      else unpairedPage(res);
+      return false;
+    }
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD' && !originAllowed(req, remote)) { json(res, 403, { error: 'Bad origin' }); return false; }
+  return true;
+}
 
 const wss = new WebSocketServer({ noServer: true });
-server.on('upgrade', (req, socket, head) => {
+
+function createServer(remote: boolean): http.Server {
+  const s = http.createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://localhost');
+    if (!gate(req, res, url, remote)) return;
+    if (url.pathname.startsWith('/api/')) return void handleApi(req, res, url, remote);
+    serveStatic(req, res, url);
+  });
+  if (remote) {
+    s.on('connection', (sock) => {
+      if (!peerAllowed(sock.remoteAddress, loadSettings().remoteAllowLan)) sock.destroy();
+    });
+  }
+  s.on('upgrade', (req, socket, head) => onUpgrade(req, socket, head, remote));
+  return s;
+}
+
+function onUpgrade(req: http.IncomingMessage, socket: import('node:stream').Duplex, head: Buffer, remote: boolean): void {
   const url = new URL(req.url || '/', 'http://localhost');
+  const ok = originAllowed(req, remote) && (remote ? isPaired(req) : loopbackHost(req.headers.host));
+  if (!ok) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
+  const track = (ws: WebSocket) => {
+    if (!remote) return;
+    remoteSockets.add(ws);
+    ws.on('close', () => remoteSockets.delete(ws));
+  };
   if (url.pathname === '/ws/events') {
     wss.handleUpgrade(req, socket, head, (ws) => {
+      track(ws);
       eventClients.add(ws);
-      ws.on('close', () => eventClients.delete(ws));
+      if (remote) remoteClients.add(ws);
+      ws.on('close', () => { eventClients.delete(ws); remoteClients.delete(ws); });
       if (snapshotJson) ws.send(snapshotJson);
     });
   } else if (url.pathname === '/ws/term') {
     const name = url.searchParams.get('tmux');
     if (!name) { socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => {
+      track(ws);
       attachTerminal(ws, name, Number(url.searchParams.get('cols')), Number(url.searchParams.get('rows')));
     });
   } else socket.destroy();
-});
+}
+
+const server = createServer(false);
 
 async function main() {
   runDoctor().then((r) => console.log(`[doctor] ${doctorSummary(r)}`));
@@ -145,6 +232,7 @@ async function main() {
     fs.watch(path.join(process.env.HOME || '', '.claude', 'sessions'), () => setTimeout(refresh, 100));
   } catch { /* dir may not exist */ }
   listen(PORT);
+  applyRemote(loadSettings(), () => createServer(true));
 }
 
 /** Listen on `port`; if a preferred port is taken, fall back to a free one (port 0). */

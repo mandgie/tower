@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Snapshot, Settings, Agent, TranscriptResponse, DoctorResult } from '../../shared/types';
+import type { Snapshot, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary } from '../../shared/types';
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { headers: { 'content-type': 'application/json' }, ...init });
@@ -23,6 +23,13 @@ export const api = {
   saveSettings: (s: Partial<Settings>) => j<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),
   projectDirs: () => j<{ dirs: string[] }>('/api/projects/dirs'),
   doctor: () => j<DoctorResult>('/api/doctor'),
+  capture: (tmux: string, lines = 0) => j<{ text: string; alt: boolean; mouse: boolean }>(`/api/tmux/${encodeURIComponent(tmux)}/capture?lines=${lines}`),
+  scroll: (tmux: string, lines: number) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/scroll`, { method: 'POST', body: JSON.stringify({ lines }) }),
+  send: (tmux: string, text: string, enter = true) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/send`, { method: 'POST', body: JSON.stringify({ text, enter }) }),
+  keys: (tmux: string, keys: string[]) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/keys`, { method: 'POST', body: JSON.stringify({ keys }) }),
+  saveWorkspaces: (w: WorkspaceSummary[]) => j<{ ok: true }>('/api/workspaces', { method: 'PUT', body: JSON.stringify(w) }),
+  remote: () => j<RemoteInfo>('/api/remote'),
+  rotateRemote: () => j<RemoteInfo>('/api/remote/rotate', { method: 'POST' }),
 };
 
 export function wsUrl(path: string): string {

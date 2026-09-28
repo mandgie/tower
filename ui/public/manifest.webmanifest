@@ -1,0 +1,12 @@
+{
+  "name": "Tower",
+  "short_name": "Tower",
+  "display": "standalone",
+  "start_url": "/",
+  "background_color": "#12171D",
+  "theme_color": "#171D24",
+  "icons": [
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

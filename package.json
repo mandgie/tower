@@ -9,7 +9,7 @@
     "dev": "concurrently -k -n server,ui,electron -c blue,magenta,green \"npm:dev:server\" \"npm:dev:ui\" \"npm:dev:electron\"",
     "dev:server": "cross-env ELECTRON_RUN_AS_NODE=1 MS_PORT=4310 electron node_modules/tsx/dist/cli.mjs watch server/index.ts",
     "dev:ui": "vite --config ui/vite.config.ts",
-    "dev:electron": "wait-on http://localhost:5173 && cross-env MS_DEV=1 electron .",
+    "dev:electron": "wait-on http-get://localhost:5173 http-get://localhost:4310/api/settings && cross-env MS_DEV=1 electron .",
     "build": "npm run build:ui && npm run build:server",
     "build:ui": "vite build --config ui/vite.config.ts",
     "build:server": "esbuild server/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/server.cjs --external:node-pty",
@@ -17,7 +17,8 @@
     "server": "cross-env MS_PORT=4310 tsx server/index.ts",
     "postinstall": "electron-rebuild -f -w node-pty",
     "icon": "sh scripts/make-icon.sh",
-    "dist": "npm run build && cross-env NODE_OPTIONS=--experimental-require-module electron-builder --mac"
+    "dist": "npm run build && cross-env NODE_OPTIONS=--experimental-require-module electron-builder --mac",
+    "promo:render": "node promo/render.mjs"
   },
   "build": {
     "appId": "com.mandgie.tower",
@@ -71,11 +72,13 @@
   },
   "dependencies": {
     "node-pty": "^1.1.0",
+    "qrcode": "^1.5.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.0",
     "@types/node": "^20.14.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@types/ws": "^8.5.0",
@@ -88,6 +91,7 @@
     "electron": "^33.0.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.24.0",
+    "playwright": "^1.63.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "tsx": "^4.19.0",

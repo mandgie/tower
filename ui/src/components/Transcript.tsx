@@ -5,20 +5,31 @@ import { fmtTokens, contextLevel } from './ContextBadge';
 
 const PAGE = 300;
 
-export function Transcript({ session }: { session: Session }) {
+/** `compact` (the phone layout) drops the stats strip and starts with tool calls hidden. */
+export function Transcript({ session, compact }: { session: Session; compact?: boolean }) {
   const [data, setData] = useState<{ messages: Message[]; stats: SessionStats } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [limit, setLimit] = useState(PAGE);
-  const [showTools, setShowTools] = useState(true);
+  const [showTools, setShowTools] = useState(!compact);
+  const keyRef = useRef('');
   const scrollRef = useRef<HTMLDivElement>(null);
   // Scroll bookkeeping: jump to the newest message on load, keep position when older ones are prepended.
   const pendingRef = useRef<{ kind: 'bottom' } | { kind: 'keep'; height: number; top: number } | null>(null);
 
+  // A new session starts from scratch; an update of the same one swaps the data in place and follows
+  // the conversation only if the reader was already at the bottom.
   useEffect(() => {
     let alive = true;
-    setData(null); setError(null); setLimit(PAGE);
-    pendingRef.current = { kind: 'bottom' };
-    api.transcript(session.agent, session.id).then((r) => { if (alive) setData(r); }).catch((e) => { if (alive) setError(e.message); });
+    const key = `${session.agent}:${session.id}`;
+    const fresh = keyRef.current !== key;
+    keyRef.current = key;
+    if (fresh) { setData(null); setError(null); setLimit(PAGE); pendingRef.current = { kind: 'bottom' }; }
+    api.transcript(session.agent, session.id).then((r) => {
+      if (!alive) return;
+      const el = scrollRef.current;
+      if (!fresh && el && el.scrollHeight - el.scrollTop - el.clientHeight < 80) pendingRef.current = { kind: 'bottom' };
+      setData(r);
+    }).catch((e) => { if (alive && fresh) setError(e.message); });
     return () => { alive = false; };
   }, [session.agent, session.id, session.updatedAt]);
 
@@ -47,7 +58,7 @@ export function Transcript({ session }: { session: Session }) {
 
   return (
     <>
-      <div className="stats-wrap"><StatsStrip stats={stats} agent={session.agent} /></div>
+      {!compact && <div className="stats-wrap"><StatsStrip stats={stats} agent={session.agent} /></div>}
       <div className="transcript" ref={scrollRef}>
       <div className="transcript-bar">
         <span className="muted">{messages.length} entries</span>

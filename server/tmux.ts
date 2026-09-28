@@ -105,15 +105,70 @@ export async function renameSession(from: string, to: string): Promise<void> {
   await tmuxQuiet(['rename-session', '-t', `=${from}`, to]);
 }
 
+/**
+ * Types `text` into the pane as a bracketed paste, so newlines stay in the prompt instead of submitting
+ * it, then presses Enter as its own key. (`send-keys -l text Enter` would type the word "Enter".)
+ */
 export async function sendKeys(name: string, text: string, enter = true): Promise<void> {
-  const args = ['send-keys', '-t', `=${name}:`];
-  if (text) args.push('-l', text);
-  if (enter) args.push('Enter');
-  await tmux(args);
+  const target = `=${name}:`;
+  if (text) {
+    const buf = `tower-${process.pid}-${Date.now()}`;
+    await tmux(['set-buffer', '-b', buf, '--', text]);
+    await tmux(['paste-buffer', '-p', '-d', '-b', buf, '-t', target]);
+    // Give the agent's input box a moment to take the paste, or Enter can land inside it.
+    if (enter) await new Promise((r) => setTimeout(r, 150));
+  }
+  if (enter) await tmux(['send-keys', '-t', target, 'Enter']);
 }
 
+/** Keys a remote device may press: enough to answer menus and permission prompts, and to interrupt. */
+const NAMED_KEYS = new Set(['Enter', 'Escape', 'Tab', 'BTab', 'Up', 'Down', 'Left', 'Right', 'BSpace', 'Space', 'C-c', 'C-d', 'C-o', 'C-r', 'C-t']);
+
+export async function pressKeys(name: string, keys: string[]): Promise<void> {
+  const ok = keys.filter((k) => NAMED_KEYS.has(k) || /^[0-9a-zA-Z]$/.test(k));
+  if (ok.length) await tmux(['send-keys', '-t', `=${name}:`, ...ok]);
+}
+
+/** The pane's text: the visible screen plus `lines` of scrollback above it (0 for the screen alone). */
 export async function capturePane(name: string, lines = 60): Promise<string> {
   return (await tmuxQuiet(['capture-pane', '-p', '-t', `=${name}:`, '-S', `-${lines}`])) ?? '';
+}
+
+export interface PaneModes {
+  alt: boolean;     // full-screen app on the alternate screen: tmux keeps no scrollback for it
+  mouse: boolean;   // the app asked for mouse events (SGR), so it scrolls itself on wheel input
+}
+
+export async function paneModes(name: string): Promise<PaneModes> {
+  const out = (await tmuxQuiet(['display', '-p', '-t', `=${name}:`, '#{alternate_on} #{mouse_any_flag}#{mouse_button_flag}#{mouse_standard_flag} #{mouse_sgr_flag}'])) ?? '';
+  const [alt, flags, sgr] = out.trim().split(' ');
+  return { alt: alt === '1', mouse: /1/.test(flags || '') && sgr === '1' };
+}
+
+/**
+ * Scrolls the pane by `lines` (positive = back in time) without a terminal attached, for touch screens
+ * that never produce wheel events. An app that takes the mouse (Claude Code's full-screen UI) gets SGR
+ * wheel events typed into it; anything with tmux scrollback scrolls in copy mode. Anything else is left
+ * alone rather than fed escape codes it would print.
+ */
+export async function scrollPane(name: string, lines: number): Promise<void> {
+  const n = Math.min(200, Math.abs(Math.trunc(lines)));
+  if (!n) return;
+  const target = `=${name}:`;
+  const m = await paneModes(name);
+  if (m.mouse) {
+    // Paced like a real wheel: Claude Code misreads a burst of 30+ events (it can scroll the wrong way
+    // or jump to the top), so send at most 5 per write, a frame apart.
+    const ev = `\x1b[<${lines > 0 ? 64 : 65};1;1M`;
+    for (let left = n; left > 0; left -= 5) {
+      await tmux(['send-keys', '-t', target, '-l', ev.repeat(Math.min(5, left))]);
+      if (left > 5) await new Promise((r) => setTimeout(r, 16));
+    }
+  } else if (!m.alt) {
+    // -e leaves copy mode by itself once scrolled back to the bottom.
+    if (lines > 0) await tmux(['copy-mode', '-e', '-t', target]);
+    await tmuxQuiet(['send-keys', '-t', target, '-X', '-N', String(n), lines > 0 ? 'scroll-up' : 'scroll-down']);
+  }
 }
 
 /** Descendant pids of the pane process, for mapping to agent registries. */

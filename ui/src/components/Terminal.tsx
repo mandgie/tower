@@ -12,6 +12,11 @@ function openLink(uri: string) {
   window.open(uri, '_blank', 'noopener');
 }
 
+/** Backslash-escape a path the way Terminal.app / iTerm do when a file is dropped on them. */
+function shellEscape(p: string) {
+  return p.replace(/[^A-Za-z0-9_\-.,:+@%/=]/g, (c) => `\\${c}`);
+}
+
 const THEME = {
   background: '#0F1418',
   foreground: '#E6ECF1',
@@ -22,7 +27,7 @@ const THEME = {
   brightBlack: '#5A6673', brightRed: '#FF8B92', brightGreen: '#A6F0BF', brightYellow: '#FFE08A', brightBlue: '#9CBBFF', brightMagenta: '#DDB0F5', brightCyan: '#9AF0DC', brightWhite: '#FFFFFF',
 };
 
-export function TerminalPane({ tmux, active, agent }: { tmux: string; active: boolean; agent: Agent }) {
+export function TerminalPane({ tmux, active, agent, fontSize = 13 }: { tmux: string; active: boolean; agent: Agent; fontSize?: number }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -35,12 +40,14 @@ export function TerminalPane({ tmux, active, agent }: { tmux: string; active: bo
     const term = new Terminal({
       theme: { ...THEME, cursor: agent === 'claude' ? '#F2A65A' : '#7FE0C8' },
       fontFamily: '"JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace',
-      fontSize: 13,
+      fontSize,
       lineHeight: 1.2,
       cursorBlink: true,
       scrollback: 5000,
       allowProposedApi: true,
-      macOptionIsMeta: true,
+      // Option must compose characters, not act as Meta: on a Swedish layout @ is ⌥2, and
+      // | [ ] { } \ ~ $ all need Option too. Shift+Enter below covers the newline binding.
+      macOptionIsMeta: false,
       allowTransparency: false,
       // OSC 8 hyperlinks (Claude Code / Codex emit these for files and URLs).
       linkHandler: { activate: (_e, uri) => openLink(uri) },
@@ -81,15 +88,36 @@ export function TerminalPane({ tmux, active, agent }: { tmux: string; active: bo
     const onBinary = term.onBinary((d) => { if (ws.readyState === ws.OPEN) ws.send(Uint8Array.from(d, (c) => c.charCodeAt(0))); });
     const onResize = term.onResize(({ cols, rows }) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
 
+    // Dropped files: a native terminal types the file's path, and Claude Code / Codex turn an
+    // image path into an attachment. Chromium's default is to navigate to the file instead
+    // (which main.cjs turns into "open in Preview"), so do what the terminal does.
+    const onDragOver = (ev: DragEvent) => {
+      if (!ev.dataTransfer?.types.includes('Files')) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'copy';
+    };
+    const onDrop = (ev: DragEvent) => {
+      if (!ev.dataTransfer?.types.includes('Files')) return;
+      ev.preventDefault();
+      const pathForFile = window.multisession?.pathForFile;
+      const paths = Array.from(ev.dataTransfer.files, (f) => pathForFile?.(f) ?? '').filter(Boolean);
+      if (!paths.length) return;
+      term.paste(paths.map(shellEscape).join(' ') + ' '); // paste() honours bracketed paste mode
+      term.focus();
+    };
+    host.addEventListener('dragover', onDragOver);
+    host.addEventListener('drop', onDrop);
+
     const ro = new ResizeObserver(() => { if (host.offsetWidth > 0 && host.offsetHeight > 0) requestAnimationFrame(() => fit.fit()); });
     ro.observe(host);
 
     return () => {
+      host.removeEventListener('dragover', onDragOver); host.removeEventListener('drop', onDrop);
       ro.disconnect(); onData.dispose(); onBinary.dispose(); onResize.dispose();
       ws.close(); term.dispose();
       termRef.current = null; wsRef.current = null;
     };
-  }, [tmux, gen, agent]);
+  }, [tmux, gen, agent, fontSize]);
 
   useEffect(() => {
     if (!active) return;
