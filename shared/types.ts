@@ -55,10 +55,29 @@ export interface Snapshot {
   generatedAt: number;
   sessions: Session[];
   projects: Project[];
+  extraDirs: ProjectDir[];          // folders from settings, listed even without sessions
   pending: PendingLaunch[];
   renamed: Record<string, string>;  // old tmux name -> current name, for panes that moved
   workspaces?: WorkspaceSummary[];  // the Mac's workspaces, mirrored for the phone
 }
+
+export interface ProjectDir { cwd: string; name: string }
+
+/**
+ * What /ws/events?v=2 sends: the whole snapshot on connect, then only what changed. Fields other than
+ * the session lists are present only when they changed; projects are derived on the client.
+ */
+export interface SnapshotDelta {
+  generatedAt: number;
+  upsert: Session[];
+  remove: string[];                 // session keys
+  extraDirs?: ProjectDir[];
+  pending?: PendingLaunch[];
+  renamed?: Record<string, string>;
+  workspaces?: WorkspaceSummary[];
+}
+
+export type SnapshotEvent = { t: 'full'; snapshot: Snapshot } | ({ t: 'delta' } & SnapshotDelta);
 
 export interface WorkspaceSummary {
   id: string;

@@ -1,4 +1,4 @@
-import { useMemo, useState, type RefObject } from 'react';
+import { memo, useCallback, useMemo, useRef, useState, type RefObject } from 'react';
 import type { Snapshot, Session, Agent } from '../../../shared/types';
 import { relTime, useNow } from '../api';
 import { statusWord } from './StatusStrip';
@@ -16,6 +16,10 @@ export function Sidebar({ snapshot, view, onView, search, onSearch, searchRef, s
   onSettings: () => void;
 }) {
   const now = useNow();
+  // The parent's handler changes with every snapshot; a stable wrapper lets unchanged rows skip rendering.
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const select = useCallback((s: Session) => onSelectRef.current(s), []);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(JSON.parse(localStorage.getItem('ms.collapsed') || '[]')));
   const toggle = (cwd: string) => setCollapsed((c) => {
     const n = new Set(c); n.has(cwd) ? n.delete(cwd) : n.add(cwd);
@@ -45,7 +49,7 @@ export function Sidebar({ snapshot, view, onView, search, onSearch, searchRef, s
 
       <div className="list">
         {view === 'recent' ? (
-          filtered.slice(0, 200).map((s) => <Row key={s.key} s={s} now={now} showProject selected={selectedKey === s.key} onSelect={onSelect} />)
+          filtered.slice(0, 200).map((s) => <Row key={s.key} s={s} now={now} showProject selected={selectedKey === s.key} onSelect={select} />)
         ) : (
           snapshot.projects.map((p) => {
             const rows = p.sessions.map((k) => byKey.get(k)!).filter((s) => s && matches(s));
@@ -62,7 +66,7 @@ export function Sidebar({ snapshot, view, onView, search, onSearch, searchRef, s
                   </button>
                   <button className="project-new" title={`New session in ${p.name}`} onClick={() => onNew(p.cwd)}>+</button>
                 </div>
-                {open && rows.map((s) => <Row key={s.key} s={s} now={now} selected={selectedKey === s.key} onSelect={onSelect} />)}
+                {open && rows.map((s) => <Row key={s.key} s={s} now={now} selected={selectedKey === s.key} onSelect={select} />)}
               </section>
             );
           })
@@ -78,7 +82,7 @@ export function Sidebar({ snapshot, view, onView, search, onSearch, searchRef, s
   );
 }
 
-function Row({ s, now, selected, onSelect, showProject }: { s: Session; now: number; selected: boolean; onSelect: (s: Session) => void; showProject?: boolean }) {
+const Row = memo(function Row({ s, now, selected, onSelect, showProject }: { s: Session; now: number; selected: boolean; onSelect: (s: Session) => void; showProject?: boolean }) {
   const external = s.live?.kind === 'external';
   return (
     <button className={`row agent-${s.agent} status-${s.status} ${selected ? 'selected' : ''} ${s.live ? 'live' : ''}`} onClick={() => onSelect(s)}
@@ -99,4 +103,4 @@ function Row({ s, now, selected, onSelect, showProject }: { s: Session; now: num
       </span>
     </button>
   );
-}
+});

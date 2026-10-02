@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { Snapshot, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary } from '../../shared/types';
+import { applyDelta } from '../../shared/snapshot';
+import type { Snapshot, SnapshotEvent, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary } from '../../shared/types';
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { headers: { 'content-type': 'application/json' }, ...init });
@@ -37,6 +38,8 @@ export function wsUrl(path: string): string {
   return `${proto}://${location.host}${path}`;
 }
 
+const EMPTY: Snapshot = { generatedAt: 0, sessions: [], projects: [], extraDirs: [], pending: [], renamed: {} };
+
 export function useSnapshot(): { snapshot: Snapshot | null; connected: boolean } {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [connected, setConnected] = useState(false);
@@ -46,13 +49,18 @@ export function useSnapshot(): { snapshot: Snapshot | null; connected: boolean }
     let retry = 1000;
     const connect = () => {
       if (closed) return;
-      ws = new WebSocket(wsUrl('/ws/events'));
+      ws = new WebSocket(wsUrl('/ws/events?v=2'));
       ws.onopen = () => { setConnected(true); retry = 1000; };
-      ws.onmessage = (ev) => { try { setSnapshot(JSON.parse(ev.data)); } catch { /* ignore */ } };
+      ws.onmessage = (ev) => {
+        let m: SnapshotEvent;
+        try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.t === 'full') setSnapshot(m.snapshot);
+        else setSnapshot((prev) => applyDelta(prev ?? EMPTY, m));
+      };
       ws.onclose = () => { setConnected(false); if (!closed) setTimeout(connect, retry); retry = Math.min(retry * 2, 10000); };
       ws.onerror = () => ws?.close();
     };
-    api.sessions().then(setSnapshot).catch(() => {});
+    // The socket opens with the whole snapshot; no separate fetch that could land after a newer delta.
     connect();
     return () => { closed = true; ws?.close(); };
   }, []);

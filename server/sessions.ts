@@ -8,7 +8,8 @@ import { loadSettings } from './settings.js';
 import { projectName, HOME, APP_DIR } from './config.js';
 import { shQuote } from './shell.js';
 import { trustFolder } from './trust.js';
-import type { Session, Project, Snapshot, Agent, PendingLaunch } from '../shared/types.js';
+import { sortSessions, buildProjects } from '../shared/snapshot.js';
+import type { Session, Snapshot, Agent, PendingLaunch } from '../shared/types.js';
 
 const WORKING_WINDOW_MS = 8000;
 
@@ -134,22 +135,11 @@ export async function buildSnapshot(): Promise<Snapshot> {
     byKey.set(key, s);
   }
 
-  sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+  sortSessions(sessions);
+  const extraDirs = settings.extraProjectDirs.filter((d) => fs.existsSync(d)).map((cwd) => ({ cwd, name: projectName(cwd) }));
+  const projects = buildProjects(sessions, extraDirs);
 
-  const projMap = new Map<string, Project>();
-  for (const s of sessions) {
-    let p = projMap.get(s.cwd);
-    if (!p) { p = { cwd: s.cwd, name: s.project, sessions: [], updatedAt: 0, liveCount: 0 }; projMap.set(s.cwd, p); }
-    p.sessions.push(s.key);
-    p.updatedAt = Math.max(p.updatedAt, s.updatedAt);
-    if (s.live && s.status !== 'ended') p.liveCount++;
-  }
-  for (const dir of settings.extraProjectDirs) {
-    if (!projMap.has(dir) && fs.existsSync(dir)) projMap.set(dir, { cwd: dir, name: projectName(dir), sessions: [], updatedAt: 0, liveCount: 0 });
-  }
-  const projects = [...projMap.values()].sort((a, b) => b.updatedAt - a.updatedAt);
-
-  return { generatedAt: now, sessions, projects, pending: [...pending.values()], renamed: Object.fromEntries(renames) };
+  return { generatedAt: now, sessions, projects, extraDirs, pending: [...pending.values()], renamed: Object.fromEntries(renames) };
 }
 
 /**

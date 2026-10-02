@@ -13,21 +13,30 @@ import { loadSettings, saveSettings } from './settings.js';
 import { loadWorkspaces, saveWorkspaces } from './workspaces.js';
 import { runDoctor, doctorSummary } from './doctor.js';
 import { applyRemote, remoteInfo, rotateToken, isPaired, isLoopback, peerAllowed, originMatchesHost, handlePair, unpairedPage } from './remote.js';
-import type { Snapshot } from '../shared/types.js';
+import type { Snapshot, SnapshotDelta } from '../shared/types.js';
 
 const here = typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 const UI_DIST = path.resolve(here, '..', 'ui', 'dist');
 
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
-let snapshot: Snapshot = { generatedAt: 0, sessions: [], projects: [], pending: [], renamed: {} };
+let snapshot: Snapshot = { generatedAt: 0, sessions: [], projects: [], extraDirs: [], pending: [], renamed: {} };
+/** Last sent JSON per session key, and per top-level field, so a tick only ships what changed. */
+let sentSessions = new Map<string, string>();
+let sentFields: Record<string, string> = {};
+/** The full snapshot as JSON, built on demand: most ticks only need the delta. */
 let snapshotJson = '';
-const eventClients = new Set<WebSocket>();
+const fullJson = () => snapshotJson || (snapshotJson = JSON.stringify(snapshot));
+/** Status feeds that take deltas (`?v=2`), and older pages (a phone with a cached build) that want whole snapshots. */
+const deltaClients = new Set<WebSocket>();
+const legacyClients = new Set<WebSocket>();
 /** Remote status feeds (one per open device) and every remote socket, so unpairing can cut them all. */
 const remoteClients = new Set<WebSocket>();
 const remoteSockets = new Set<WebSocket>();
 let refreshing = false;
 let refreshQueued = false;
+
+const DELTA_FIELDS = ['extraDirs', 'pending', 'renamed', 'workspaces'] as const;
 
 async function refresh(): Promise<Snapshot> {
   if (refreshing) { refreshQueued = true; return snapshot; }
@@ -35,12 +44,27 @@ async function refresh(): Promise<Snapshot> {
   try {
     const next = await buildSnapshot();
     next.workspaces = loadWorkspaces();
-    const json = JSON.stringify(next);
-    // Compare without the timestamp so unchanged state does not spam clients.
-    const strip = (s: Snapshot) => JSON.stringify({ ...s, generatedAt: 0 });
-    const changed = strip(next) !== strip(snapshot);
-    snapshot = next; snapshotJson = json;
-    if (changed) for (const c of eventClients) if (c.readyState === c.OPEN) c.send(json);
+    const delta: SnapshotDelta = { generatedAt: next.generatedAt, upsert: [], remove: [] };
+    const sessions = new Map<string, string>();
+    for (const s of next.sessions) {
+      const j = JSON.stringify(s);
+      sessions.set(s.key, j);
+      if (sentSessions.get(s.key) !== j) delta.upsert.push(s);
+    }
+    for (const k of sentSessions.keys()) if (!sessions.has(k)) delta.remove.push(k);
+    const fields: Record<string, string> = {};
+    let changed = delta.upsert.length > 0 || delta.remove.length > 0;
+    for (const f of DELTA_FIELDS) {
+      fields[f] = JSON.stringify(next[f] ?? null);
+      if (fields[f] !== sentFields[f]) { (delta as any)[f] = next[f]; changed = true; }
+    }
+    snapshot = next; snapshotJson = '';
+    sentSessions = sessions; sentFields = fields;
+    if (changed) {
+      const msg = JSON.stringify({ t: 'delta', ...delta });
+      for (const c of deltaClients) if (c.readyState === c.OPEN) c.send(msg);
+      if (legacyClients.size) { const full = fullJson(); for (const c of legacyClients) if (c.readyState === c.OPEN) c.send(full); }
+    }
   } catch (e) {
     console.error('[snapshot] failed', e);
   } finally {
@@ -76,7 +100,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         return json(res, 200, await remoteInfo(loadSettings(), 0));
       }
     }
-    if (m === 'GET' && p === '/api/sessions') return json(res, 200, snapshotJson || JSON.stringify(await refresh()));
+    if (m === 'GET' && p === '/api/sessions') { if (!snapshot.generatedAt) await refresh(); return json(res, 200, fullJson()); }
     if (m === 'POST' && p === '/api/refresh') return json(res, 200, await refresh());
     if (m === 'GET' && p === '/api/settings') return json(res, 200, loadSettings());
     if (m === 'PUT' && p === '/api/settings') {
@@ -204,12 +228,14 @@ function onUpgrade(req: http.IncomingMessage, socket: import('node:stream').Dupl
     ws.on('close', () => remoteSockets.delete(ws));
   };
   if (url.pathname === '/ws/events') {
+    const deltas = url.searchParams.get('v') === '2';
     wss.handleUpgrade(req, socket, head, (ws) => {
       track(ws);
-      eventClients.add(ws);
+      const set = deltas ? deltaClients : legacyClients;
+      set.add(ws);
       if (remote) remoteClients.add(ws);
-      ws.on('close', () => { eventClients.delete(ws); remoteClients.delete(ws); });
-      if (snapshotJson) ws.send(snapshotJson);
+      ws.on('close', () => { set.delete(ws); remoteClients.delete(ws); });
+      if (snapshot.generatedAt) ws.send(deltas ? `{"t":"full","snapshot":${fullJson()}}` : fullJson());
     });
   } else if (url.pathname === '/ws/term') {
     const name = url.searchParams.get('tmux');
