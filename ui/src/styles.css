@@ -212,7 +212,7 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .term-wrap { position: absolute; inset: 4px 2px 2px 6px; }
 .term-host { width: 100%; height: 100%; }
 .xterm .xterm-viewport { scrollbar-width: thin; }
-.term-overlay { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(15,20,24,0.75); text-align: center; }
+.term-overlay { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; background: rgba(15,20,24,0.75); text-align: center; }
 
 .empty { display: grid; place-items: center; }
 .empty-inner { text-align: center; color: var(--mist); }
