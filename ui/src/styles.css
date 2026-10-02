@@ -157,7 +157,8 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 
 .stage { flex: 1; min-height: 0; position: relative; }
 .grid { position: absolute; inset: 0; display: grid; grid-auto-rows: minmax(0, 1fr); gap: 6px; padding: 6px; background: var(--ink); }
-.hidden-grid { visibility: hidden; pointer-events: none; }
+/* Off screen rather than display:none, so terminals keep their size; xterm pauses drawing while out of view. */
+.hidden-grid { visibility: hidden; pointer-events: none; transform: translateX(-200vw); }
 .grid-empty { grid-column: 1 / -1; display: grid; place-items: center; color: var(--mist); }
 .transcript-view { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--ink); }
 .stage .empty { position: absolute; inset: 0; background: var(--ink); }

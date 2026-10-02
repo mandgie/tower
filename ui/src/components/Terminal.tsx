@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
 import type { Agent } from '../../../shared/types';
 import { wsUrl } from '../api';
 
@@ -27,7 +28,7 @@ const THEME = {
   brightBlack: '#5A6673', brightRed: '#FF8B92', brightGreen: '#A6F0BF', brightYellow: '#FFE08A', brightBlue: '#9CBBFF', brightMagenta: '#DDB0F5', brightCyan: '#9AF0DC', brightWhite: '#FFFFFF',
 };
 
-export function TerminalPane({ tmux, active, agent, fontSize = 13 }: { tmux: string; active: boolean; agent: Agent; fontSize?: number }) {
+export const TerminalPane = memo(function TerminalPane({ tmux, active, agent, fontSize = 13 }: { tmux: string; active: boolean; agent: Agent; fontSize?: number }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -108,11 +109,28 @@ export function TerminalPane({ tmux, active, agent, fontSize = 13 }: { tmux: str
     host.addEventListener('dragover', onDragOver);
     host.addEventListener('drop', onDrop);
 
+    // Draw with WebGL while the pane is on screen. Chromium keeps only ~16 live WebGL contexts, so a pane in a
+    // hidden workspace gives its context back, and a lost context falls back to the DOM renderer.
+    let webgl: WebglAddon | null = null;
+    const dropWebgl = () => { webgl?.dispose(); webgl = null; };
+    const io = new IntersectionObserver(([e]) => {
+      if (!e.isIntersecting) { dropWebgl(); return; }
+      if (webgl) return;
+      try {
+        const addon = new WebglAddon();
+        addon.onContextLoss(() => { if (webgl === addon) dropWebgl(); });
+        term.loadAddon(addon);
+        webgl = addon;
+      } catch { webgl = null; }
+    });
+    io.observe(host);
+
     const ro = new ResizeObserver(() => { if (host.offsetWidth > 0 && host.offsetHeight > 0) requestAnimationFrame(() => fit.fit()); });
     ro.observe(host);
 
     return () => {
       host.removeEventListener('dragover', onDragOver); host.removeEventListener('drop', onDrop);
+      io.disconnect(); dropWebgl();
       ro.disconnect(); onData.dispose(); onBinary.dispose(); onResize.dispose();
       ws.close(); term.dispose();
       termRef.current = null; wsRef.current = null;
@@ -138,4 +156,4 @@ export function TerminalPane({ tmux, active, agent, fontSize = 13 }: { tmux: str
       )}
     </div>
   );
-}
+});
