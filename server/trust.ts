@@ -17,7 +17,7 @@ function read(): Config | null {
   try { return JSON.parse(fs.readFileSync(CONFIG, 'utf8')); } catch { return null; }
 }
 
-/** The folder or one of its parents is trusted. Claude never stores trust for the home folder itself. */
+/** The folder or one of its parents is trusted. */
 function isTrusted(cfg: Config, dir: string): boolean {
   for (let d = dir; ; d = path.dirname(d)) {
     if (cfg.projects?.[d]?.hasTrustDialogAccepted) return true;
@@ -27,8 +27,9 @@ function isTrusted(cfg: Config, dir: string): boolean {
 
 export async function trustFolder(cwd: string): Promise<void> {
   let dir: string;
-  try { dir = fs.realpathSync(cwd); } catch { return; }   // Claude keys folders by their real path (/tmp is /private/tmp)
-  if (dir === HOME) return;
+  // Claude keys folders by their real path (/tmp is /private/tmp). It never saves a "yes" for the home
+  // folder (it asks again every launch, defaulting to "No, exit"), but it does honour the flag when set.
+  try { dir = fs.realpathSync(cwd); } catch { return; }
   // Every Claude process rewrites this file whole (temp file + rename, no lock), so a write can be
   // lost to one of theirs. Read it back and try again a couple of times.
   for (let attempt = 0; attempt < 3; attempt++) {
