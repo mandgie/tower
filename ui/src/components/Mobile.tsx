@@ -3,6 +3,7 @@ import type { Agent, Session, Snapshot, WorkspaceSummary } from '../../../shared
 import { api, relTime, useNow, useSnapshot } from '../api';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
+import { LoopBadge } from './LoopBadge';
 import { Transcript } from './Transcript';
 import { TerminalPane } from './Terminal';
 import { NewSession } from './NewSession';
@@ -184,7 +185,8 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
     return {
       waiting: live.filter((s) => s.status === 'waiting'),
       working: live.filter((s) => s.status === 'working'),
-      open: live.filter((s) => s.status !== 'waiting' && s.status !== 'working'),
+      looping: live.filter((s) => s.status === 'looping'),
+      open: live.filter((s) => s.status !== 'waiting' && s.status !== 'working' && s.status !== 'looping'),
       recent: recent.sort((a, b) => b.updatedAt - a.updatedAt),
     };
   }, [sessions, scope]);
@@ -205,8 +207,9 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
         {!loaded && <div className="m-note">Reading sessions…</div>}
         <Group title="Needs you" rows={groups.waiting} now={now} onOpen={onOpen} />
         <Group title="Working" rows={groups.working} now={now} onOpen={onOpen} />
+        <Group title="Looping" rows={groups.looping} now={now} onOpen={onOpen} />
         <Group title="Open" rows={groups.open} now={now} onOpen={onOpen} />
-        {loaded && !groups.waiting.length && !groups.working.length && !groups.open.length && <div className="m-note">{scope ? `Nothing running in ${scope.name}.` : 'No live sessions.'} Resume one below or start a new one with +.</div>}
+        {loaded && !groups.waiting.length && !groups.working.length && !groups.looping.length && !groups.open.length && <div className="m-note">{scope ? `Nothing running in ${scope.name}.` : 'No live sessions.'} Resume one below or start a new one with +.</div>}
         <Group title={scope && scope.id !== 'other' ? `Recent in ${scope.name}` : 'Recent'} rows={groups.recent.slice(0, recentShown)} now={now} onOpen={onOpen} />
         {groups.recent.length > recentShown && <button className="btn ghost wide" onClick={() => setRecentShown((n) => n + RECENT_PAGE * 2)}>Show more</button>}
         <button className="m-layout-link" onClick={onDesktop}>Use the desktop layout</button>
@@ -228,6 +231,7 @@ function Group({ title, rows, now, onOpen }: { title: string; rows: Session[]; n
             <span className="m-row-meta">
               <span>{s.project}</span>
               {s.gitBranch && s.gitBranch !== 'HEAD' && <span className="branch">{s.gitBranch}</span>}
+              {s.live && <LoopBadge session={s} />}
               {s.live && <ContextBadge session={s} />}
             </span>
           </span>

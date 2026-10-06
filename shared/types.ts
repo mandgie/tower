@@ -1,6 +1,7 @@
 export type Agent = 'claude' | 'codex';
 
-export type Status = 'working' | 'waiting' | 'ended' | 'idle';
+/** `looping`: waiting at the prompt, but a /loop wakeup or cron job will start the next turn by itself. */
+export type Status = 'working' | 'waiting' | 'looping' | 'ended' | 'idle';
 
 export interface LiveTmux {
   kind: 'tmux';
@@ -35,6 +36,21 @@ export interface Session {
   status: Status;
   agentName?: string;  // claude's own session name (e.g. fpl-72)
   context?: SessionContext;  // context window fill after the last turn, from the transcript tail
+  loop?: SessionLoop;        // a /loop (or other scheduled prompt) armed in this live Claude process
+}
+
+/** What Claude's own scheduler will run next, read from ScheduleWakeup / CronCreate calls in the transcript. */
+export interface SessionLoop {
+  kind: 'self-paced' | 'cron';
+  prompt: string;      // what each tick runs; '' for an autonomous loop
+  ticks: number;       // turns the loop has run (a lower bound if it started before the transcript tail Tower read)
+  startedAt?: number;
+  lastAt?: number;     // when the last tick was scheduled (self-paced) or fired (cron)
+  nextAt?: number;     // self-paced: when the next wakeup fires
+  reason?: string;     // self-paced: why the model picked that delay
+  quiet?: number;      // self-paced: trailing ticks the model marked noop (nothing changed)
+  schedule?: string;   // cron: human schedule ("Every 5 minutes") or the raw cron expression
+  jobs?: number;       // scheduled cron jobs in this process, when there is more than one
 }
 
 export interface SessionContext {

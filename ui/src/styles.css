@@ -10,6 +10,7 @@
   --claude: #F2A65A;
   --codex: #7FE0C8;
   --wait: #FFD166;
+  --loop: #9DB8FF;
   --ended: #6B7784;
   --danger: #F07178;
   --font-ui: -apple-system, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
@@ -52,6 +53,7 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .strip-summary { display: flex; gap: 12px; font-size: 12px; white-space: nowrap; }
 .sum-wait { color: var(--wait); font-weight: 600; }
 .sum-work { color: var(--mist); }
+.sum-loop { color: var(--loop); }
 .chips { display: flex; gap: 6px; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; }
 .chips::-webkit-scrollbar { display: none; }
 .chip {
@@ -70,6 +72,7 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .agent-codex .dot { background: var(--codex); }
 .dot.status-working, .status-working > .dot { animation: pulse 1.4s ease-in-out infinite; }
 .dot.status-waiting, .status-waiting > .dot { background: var(--wait) !important; box-shadow: 0 0 0 3px rgba(255,209,102,0.22); }
+.dot.status-looping, .status-looping > .dot { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--loop); }
 .dot.status-ended, .status-ended > .dot { background: var(--ended) !important; animation: none; }
 .dot.external { background: transparent !important; border: 2px solid currentColor; opacity: 0.7; animation: none; box-shadow: none; }
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
@@ -208,6 +211,15 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--raised); color: var(--mist); flex: 0 0 auto; }
 .pill.status-waiting { background: rgba(255,209,102,0.15); color: var(--wait); }
 .pill.status-working { color: var(--fog); }
+.pill.status-looping { background: rgba(157,184,255,0.13); color: var(--loop); }
+.chip.status-looping .chip-meta, .pane.status-looping .pane-status, .m-status.status-looping { color: var(--loop); }
+.loop { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--loop); white-space: nowrap; }
+.loop.quiet { color: var(--mist); }
+.loop-icon { font-size: 12px; line-height: 1; }
+.head-meta .loop { font-size: 11px; }
+.m-row-meta .loop { min-width: 0; flex-shrink: 1; overflow: hidden; }
+.m-row-meta .loop-text { overflow: hidden; text-overflow: ellipsis; }
+.m-row-meta .loop ~ .ctx { display: none; }
 
 .term-wrap { position: absolute; inset: 4px 2px 2px 6px; }
 .term-host { width: 100%; height: 100%; }
@@ -334,6 +346,7 @@ details summary::-webkit-details-marker { display: none; }
 .m-row.agent-codex .rail { background: var(--codex); opacity: 0.35; }
 .m-row.live .rail { opacity: 1; }
 .m-row.live.status-waiting .rail { background: var(--wait); }
+.m-row.live.status-looping .rail { background: var(--loop); }
 .m-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .m-row-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-row-meta { display: flex; gap: 10px; align-items: center; font-size: 12.5px; color: var(--mist); min-width: 0; overflow: hidden; white-space: nowrap; }

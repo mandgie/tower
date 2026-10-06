@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Session } from '../../../shared/types';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
+import { LoopBadge } from './LoopBadge';
 
 export function SessionHeader({ session: s, onResume, onFork, onKill }: {
   session: Session; onResume?: () => void; onFork?: () => void; onKill?: () => void;
@@ -27,6 +28,7 @@ export function SessionHeader({ session: s, onResume, onFork, onKill }: {
           {s.gitBranch && s.gitBranch !== 'HEAD' && <span className="mono">⎇ {s.gitBranch}</span>}
           {s.model && <span className="mono">{s.model}</span>}
           <ContextBadge session={s} />
+          <LoopBadge session={s} />
           {s.agentName && <span className="mono">{s.agentName}</span>}
           <span className="mono dim" title="Session id" onClick={() => navigator.clipboard?.writeText(s.id)} style={{ cursor: 'copy' }}>{s.id.slice(0, 8)}</span>
         </div>

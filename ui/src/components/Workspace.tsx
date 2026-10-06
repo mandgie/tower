@@ -3,6 +3,7 @@ import type { Agent, Session, Status } from '../../../shared/types';
 import { TerminalPane } from './Terminal';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
+import { LoopBadge } from './LoopBadge';
 
 export interface Pane { tmux: string; agent: Agent; openedAt?: number }
 /** `auto` marks a generated name that gets replaced by the first session's project. Renaming clears it. */
@@ -16,7 +17,7 @@ export function gridColumns(n: number): number {
   return 4;
 }
 
-const RANK: Record<Status, number> = { waiting: 0, working: 1, ended: 2, idle: 3 };
+const RANK: Record<Status, number> = { waiting: 0, working: 1, looping: 2, ended: 3, idle: 4 };
 export function summarizeStatus(statuses: Status[]): Status | null {
   if (!statuses.length) return null;
   return statuses.reduce((a, b) => (RANK[a] <= RANK[b] ? a : b));
@@ -115,6 +116,7 @@ function PaneView({ pane, session: s, focused, hidden, maximized, dragging, over
         <span className="dot" />
         <span className="pane-project">{s?.project ?? pane.tmux.replace(/^ms-\w+-/, '')}</span>
         <span className="pane-title">{s?.title ?? ''}</span>
+        {s && <LoopBadge session={s} />}
         {s && <ContextBadge session={s} />}
         <span className="pane-status">{statusWord(status)}</span>
         <span className="pane-actions">

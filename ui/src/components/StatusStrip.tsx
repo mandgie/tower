@@ -1,7 +1,7 @@
 import type { Session } from '../../../shared/types';
 import { relTime, useNow } from '../api';
 
-const ORDER: Record<string, number> = { waiting: 0, working: 1, ended: 2, idle: 3 };
+const ORDER: Record<string, number> = { waiting: 0, working: 1, looping: 2, ended: 3, idle: 4 };
 
 export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpen, onToggleSidebar }: {
   sessions: Session[]; connected: boolean; onPick: (s: Session) => void; activeKey: string | null;
@@ -11,6 +11,7 @@ export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpe
   const live = sessions.filter((s) => s.live).sort((a, b) => (ORDER[a.status] - ORDER[b.status]) || (b.updatedAt - a.updatedAt));
   const waiting = live.filter((s) => s.status === 'waiting').length;
   const working = live.filter((s) => s.status === 'working').length;
+  const looping = live.filter((s) => s.status === 'looping').length;
 
   return (
     <header className="strip">
@@ -31,6 +32,7 @@ export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpe
           <>
             {waiting > 0 && <span className="sum sum-wait">{waiting} need{waiting === 1 ? 's' : ''} you</span>}
             {working > 0 && <span className="sum sum-work">{working} working</span>}
+            {looping > 0 && <span className="sum sum-loop">{looping} looping</span>}
           </>
         )}
       </div>
@@ -49,5 +51,5 @@ export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpe
 }
 
 export function statusWord(st: Session['status']): string {
-  return st === 'waiting' ? 'needs you' : st === 'working' ? 'working' : st === 'ended' ? 'exited' : '';
+  return st === 'waiting' ? 'needs you' : st === 'working' ? 'working' : st === 'looping' ? 'looping' : st === 'ended' ? 'exited' : '';
 }

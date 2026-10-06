@@ -109,6 +109,8 @@ export async function buildSnapshot(): Promise<Snapshot> {
     } else {
       s.status = 'idle';
     }
+    if (s.loop && !loopArmed(s, reg, now)) s.loop = undefined;
+    if (s.loop && s.status === 'waiting') s.status = 'looping';
     sessions.push(s);
     byKey.set(s.key, s);
   }
@@ -140,6 +142,18 @@ export async function buildSnapshot(): Promise<Snapshot> {
   const projects = buildProjects(sessions, extraDirs);
 
   return { generatedAt: now, sessions, projects, extraDirs, pending: [...pending.values()], renamed: Object.fromEntries(renames) };
+}
+
+/** A wakeup this long overdue while the session sits at the prompt was the last one: the tick ran and did not reschedule. */
+const WAKE_GRACE_MS = 2 * 60 * 1000;
+
+/** Loops live in the Claude process, so they count only while it runs and only if it scheduled them itself. */
+function loopArmed(s: Session, reg: ClaudeLive | undefined, now: number): boolean {
+  const l = s.loop;
+  if (!l || !s.live || s.status === 'ended' || s.status === 'idle') return false;
+  if (reg?.startedAt && (l.lastAt ?? 0) < reg.startedAt) return false;
+  if (l.kind === 'self-paced' && l.nextAt && l.nextAt < now - WAKE_GRACE_MS && s.status !== 'working') return false;
+  return true;
 }
 
 /**
