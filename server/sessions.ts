@@ -208,6 +208,20 @@ export interface LaunchOptions {
   prompt?: string;
   extraArgs?: string[];
   skipPermissions?: boolean;
+  createFolder?: boolean;  // make the folder first (one level: its parent must exist)
+}
+
+export interface FolderInfo { path: string; exists: boolean; isDir: boolean; parent: string; parentExists: boolean }
+
+/** What the New session dialog needs to say about a typed folder before launching there. */
+export function folderInfo(raw: string): FolderInfo {
+  const p = path.resolve(raw.trim().replace(/^~(?=\/|$)/, HOME));
+  const parent = path.dirname(p);
+  let st: fs.Stats | null = null;
+  try { st = fs.statSync(p); } catch { /* missing */ }
+  let parentExists = false;
+  try { parentExists = fs.statSync(parent).isDirectory(); } catch { /* missing */ }
+  return { path: p, exists: !!st, isDir: !!st?.isDirectory(), parent, parentExists };
 }
 
 function claudeArgs(settings: ReturnType<typeof loadSettings>, o: LaunchOptions): string[] {
@@ -226,8 +240,16 @@ function codexArgs(settings: ReturnType<typeof loadSettings>, o: LaunchOptions):
 
 export async function launchNew(o: LaunchOptions): Promise<{ tmux: string; key?: string }> {
   const settings = loadSettings();
-  o.cwd = o.cwd.replace(/^~(?=\/|$)/, HOME);
-  if (!fs.existsSync(o.cwd)) throw new Error(`Folder does not exist: ${o.cwd}`);
+  o.cwd = o.cwd.trim().replace(/^~(?=\/|$)/, HOME);
+  if (!path.isAbsolute(o.cwd)) throw new Error('Use a full path, such as ~/repos/my-project.');
+  const f = folderInfo(o.cwd);
+  if (f.exists && !f.isDir) throw new Error(`Not a folder: ${o.cwd}`);
+  if (!f.exists) {
+    if (!o.createFolder) throw new Error(`Folder does not exist: ${o.cwd}`);
+    if (!f.parentExists) throw new Error(`Cannot create ${path.basename(f.path)}: ${f.parent} does not exist.`);
+    fs.mkdirSync(f.path);
+  }
+  o.cwd = f.path;
   if (o.agent === 'claude') {
     if (settings.trustFolders) await trustFolder(o.cwd);
     const id = randomUUID();

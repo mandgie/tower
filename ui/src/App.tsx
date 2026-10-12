@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session, Agent, DoctorResult } from '../../shared/types';
-import { api, useSnapshot } from './api';
+import { api, useSnapshot, type LaunchBody } from './api';
 import { StatusStrip } from './components/StatusStrip';
 import { Sidebar } from './components/Sidebar';
 import { Transcript } from './components/Transcript';
@@ -243,7 +243,7 @@ export function App() {
     } catch (e) { setError((e as Error).message); }
   }, [openTerminal]);
 
-  const launch = useCallback(async (body: { agent: Agent; cwd: string; prompt?: string; skipPermissions?: boolean }) => {
+  const launch = useCallback(async (body: LaunchBody) => {
     const r = await api.launch(body);
     setNewOpen(null);
     openTerminal(r.tmux, body.agent, r.key);
@@ -263,9 +263,9 @@ export function App() {
 
   // Cmd+D: a fresh session in the same folder and with the same agent as the focused pane, beside it.
   const duplicate = useCallback(async () => {
-    // Fall back to the first pane of the active workspace, since focus is not restored after a reload.
-    const paneTmux = focused ?? active?.panes[0]?.tmux;
-    const src = (paneTmux && byTmux.get(paneTmux)) || selected;
+    // Fall back to another pane of the active workspace: focus is not restored after a reload, and a pane
+    // launched a moment ago has no session yet.
+    const src = (focused && byTmux.get(focused)) || active?.panes.map((p) => byTmux.get(p.tmux)).find(Boolean) || selected;
     if (!src) { setNewOpen({}); return; }
     try { await launch({ agent: src.agent, cwd: src.cwd, skipPermissions: localStorage.getItem('ms.skipPerms') !== '0' }); }
     catch (e) { setError((e as Error).message); }
@@ -355,7 +355,7 @@ export function App() {
             {workspaces.map((w) => (
               <PaneGrid key={w.id} workspace={w} byTmux={byTmux} focused={focused} visible={!transcriptMode && w.id === activeId}
                 onFocus={(tmux) => { setFocused(tmux); const s = byTmux.get(tmux); if (s) setSelectedKey(s.key); }}
-                onSwap={swapPanes} onMaximize={setMaximized} onRemove={removePane} onKill={killPane} />
+                onSwap={swapPanes} onMaximize={setMaximized} onRemove={removePane} onKill={killPane} onAdd={duplicate} />
             ))}
             {transcriptMode && selected && (
               <div className="transcript-view">

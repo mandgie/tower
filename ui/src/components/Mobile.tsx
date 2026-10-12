@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { Agent, Session, Snapshot, WorkspaceSummary } from '../../../shared/types';
-import { api, relTime, useNow, useSnapshot } from '../api';
+import { api, relTime, useNow, useSnapshot, type LaunchBody } from '../api';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
 import { LoopBadge } from './LoopBadge';
@@ -89,7 +89,7 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   const scopes = useMemo(() => workspaceScopes(snapshot), [snapshot]);
   const scope = scopes.find((x) => x.id === filter) ?? null;
 
-  const launch = async (body: { agent: Agent; cwd: string; prompt?: string; skipPermissions?: boolean }) => {
+  const launch = async (body: LaunchBody) => {
     const r = await api.launch(body);
     setNewOpen(false);
     if (r.key) go(r.key);

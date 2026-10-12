@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { PORT } from './config.js';
-import { buildSnapshot, launchNew, resumeSession, closeTmux, listProjectDirs } from './sessions.js';
+import { buildSnapshot, launchNew, resumeSession, closeTmux, listProjectDirs, folderInfo } from './sessions.js';
 import { claudeTranscript } from './claude.js';
 import { codexTranscript } from './codex.js';
 import { ensureServer, capturePane, sendKeys, pressKeys, paneModes, scrollPane } from './tmux.js';
@@ -117,6 +117,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       return json(res, 200, { ok: true });
     }
     if (m === 'GET' && p === '/api/projects/dirs') return json(res, 200, { dirs: listProjectDirs() });
+    if (m === 'GET' && p === '/api/folder') return json(res, 200, folderInfo(url.searchParams.get('path') || ''));
     if (m === 'GET' && p === '/api/doctor') return json(res, 200, await runDoctor());
 
     let mm = p.match(/^\/api\/sessions\/(claude|codex)\/([^/]+)\/(transcript|resume|fork)$/);

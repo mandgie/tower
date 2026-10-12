@@ -163,6 +163,14 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 /* Off screen rather than display:none, so terminals keep their size; xterm pauses drawing while out of view. */
 .hidden-grid { visibility: hidden; pointer-events: none; transform: translateX(-200vw); }
 .grid-empty { grid-column: 1 / -1; display: grid; place-items: center; color: var(--mist); }
+.grid-add {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-width: 0; min-height: 0;
+  border: 1px dashed var(--line); border-radius: 8px; background: transparent; color: var(--dim); cursor: pointer; transition: border-color 120ms, color 120ms, background 120ms;
+}
+.grid-add:hover, .grid-add:focus-visible { border-color: var(--mist); color: var(--fog); background: var(--panel); outline: none; }
+.grid-add-plus { font-size: 40px; font-weight: 200; line-height: 1; }
+.grid-add-label { font-size: 12px; opacity: 0; transition: opacity 120ms; }
+.grid-add:hover .grid-add-label, .grid-add:focus-visible .grid-add-label { opacity: 1; }
 .transcript-view { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--ink); }
 .stage .empty { position: absolute; inset: 0; background: var(--ink); }
 
@@ -284,6 +292,10 @@ details summary::-webkit-details-marker { display: none; }
 .modal { width: 520px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 30px 80px rgba(0,0,0,0.5); }
 .modal h2 { margin: 0; font-size: 16px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
+.field-note { font-size: 12px; color: var(--mist); }
+.field-note.new { color: var(--codex); }
+.field-note.new b { font-weight: 600; }
+.field-note.warn { color: var(--wait); }
 .label { font-size: 12px; color: var(--mist); font-weight: 600; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 /* ---------- remote access (settings) ---------- */

@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { applyDelta } from '../../shared/snapshot';
 import type { Snapshot, SnapshotEvent, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary } from '../../shared/types';
 
+export interface LaunchBody { agent: Agent; cwd: string; prompt?: string; skipPermissions?: boolean; createFolder?: boolean }
+export interface FolderInfo { path: string; exists: boolean; isDir: boolean; parent: string; parentExists: boolean }
+
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { headers: { 'content-type': 'application/json' }, ...init });
   if (!r.ok) {
@@ -17,12 +20,13 @@ export const api = {
   transcript: (agent: Agent, id: string) => j<TranscriptResponse>(`/api/sessions/${agent}/${id}/transcript`),
   resume: (agent: Agent, id: string, opts: { skipPermissions?: boolean; fork?: boolean } = {}) =>
     j<{ tmux: string }>(`/api/sessions/${agent}/${id}/${opts.fork ? 'fork' : 'resume'}`, { method: 'POST', body: JSON.stringify(opts) }),
-  launch: (body: { agent: Agent; cwd: string; prompt?: string; skipPermissions?: boolean }) =>
+  launch: (body: LaunchBody) =>
     j<{ tmux: string; key?: string }>('/api/sessions/new', { method: 'POST', body: JSON.stringify(body) }),
   kill: (tmux: string) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/kill`, { method: 'POST' }),
   settings: () => j<Settings>('/api/settings'),
   saveSettings: (s: Partial<Settings>) => j<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),
   projectDirs: () => j<{ dirs: string[] }>('/api/projects/dirs'),
+  folder: (path: string) => j<FolderInfo>(`/api/folder?path=${encodeURIComponent(path)}`),
   doctor: () => j<DoctorResult>('/api/doctor'),
   capture: (tmux: string, lines = 0) => j<{ text: string; alt: boolean; mouse: boolean }>(`/api/tmux/${encodeURIComponent(tmux)}/capture?lines=${lines}`),
   scroll: (tmux: string, lines: number) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/scroll`, { method: 'POST', body: JSON.stringify({ lines }) }),

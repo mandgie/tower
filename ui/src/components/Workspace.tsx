@@ -63,14 +63,18 @@ export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing
   );
 }
 
-export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap, onMaximize, onRemove, onKill }: {
+export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap, onMaximize, onRemove, onKill, onAdd }: {
   workspace: Workspace; byTmux: Map<string, Session>; focused: string | null; visible: boolean;
   onFocus: (tmux: string) => void; onSwap: (a: string, b: string) => void; onMaximize: (tmux: string | null) => void;
-  onRemove: (tmux: string) => void; onKill: (tmux: string) => void;
+  onRemove: (tmux: string) => void; onKill: (tmux: string) => void; onAdd: () => void;
 }) {
   const panes = workspace.panes;
   const max = workspace.maximized && panes.some((p) => p.tmux === workspace.maximized) ? workspace.maximized : null;
   const cols = max ? 1 : gridColumns(panes.length);
+  // Cells the last row leaves empty; they always sit in that row, so one tile spans them.
+  const spare = max || !panes.length ? 0 : (cols - (panes.length % cols)) % cols;
+  // Same source as ⌘D: the focused pane, else the first pane with a known session.
+  const src = (focused && panes.some((p) => p.tmux === focused) && byTmux.get(focused)) || panes.map((p) => byTmux.get(p.tmux)).find(Boolean);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
 
@@ -94,6 +98,13 @@ export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap,
           />
         );
       })}
+      {spare > 0 && (
+        <button className="grid-add" style={{ gridColumn: `span ${spare}` }} onClick={onAdd}
+          title={src ? `New ${src.agent === 'claude' ? 'Claude' : 'Codex'} session in ${src.project}  ⌘D` : 'New session  ⌘D'}>
+          <span className="grid-add-plus" aria-hidden>+</span>
+          <span className="grid-add-label">{src ? `New ${src.agent === 'claude' ? 'Claude' : 'Codex'} in ${src.project}` : 'New session'} <kbd>⌘D</kbd></span>
+        </button>
+      )}
     </div>
   );
 }
