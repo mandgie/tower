@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { applyDelta } from '../../shared/snapshot';
-import type { Snapshot, SnapshotEvent, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary } from '../../shared/types';
+import type { Snapshot, SnapshotEvent, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary, WorkspaceOp, WorkspaceOpRequest } from '../../shared/types';
 
-export interface LaunchBody { agent: Agent; cwd: string; prompt?: string; skipPermissions?: boolean; createFolder?: boolean }
+/** Where the Mac should put a session the phone starts (see `Placement`); absent on the desktop, which opens its own panes. */
+export interface Place { workspace?: string }
+export interface LaunchBody { agent: Agent; cwd: string; prompt?: string; skipPermissions?: boolean; createFolder?: boolean; place?: Place }
 export interface FolderInfo { path: string; exists: boolean; isDir: boolean; parent: string; parentExists: boolean }
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
@@ -18,7 +20,7 @@ async function j<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   sessions: () => j<Snapshot>('/api/sessions'),
   transcript: (agent: Agent, id: string) => j<TranscriptResponse>(`/api/sessions/${agent}/${id}/transcript`),
-  resume: (agent: Agent, id: string, opts: { skipPermissions?: boolean; fork?: boolean } = {}) =>
+  resume: (agent: Agent, id: string, opts: { skipPermissions?: boolean; fork?: boolean; place?: Place } = {}) =>
     j<{ tmux: string }>(`/api/sessions/${agent}/${id}/${opts.fork ? 'fork' : 'resume'}`, { method: 'POST', body: JSON.stringify(opts) }),
   launch: (body: LaunchBody) =>
     j<{ tmux: string; key?: string }>('/api/sessions/new', { method: 'POST', body: JSON.stringify(body) }),
@@ -32,6 +34,9 @@ export const api = {
   scroll: (tmux: string, lines: number) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/scroll`, { method: 'POST', body: JSON.stringify({ lines }) }),
   send: (tmux: string, text: string, enter = true) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/send`, { method: 'POST', body: JSON.stringify({ text, enter }) }),
   keys: (tmux: string, keys: string[]) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/keys`, { method: 'POST', body: JSON.stringify({ keys }) }),
+  workspaceOp: (op: WorkspaceOpRequest) => j<WorkspaceOp>('/api/workspaces/ops', { method: 'POST', body: JSON.stringify(op) }),
+  clearWorkspaceOp: (id: string) => j<{ ok: true }>(`/api/workspaces/ops/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  clearPlacement: (tmux: string) => j<{ ok: true }>(`/api/placements/${encodeURIComponent(tmux)}`, { method: 'DELETE' }),
   saveWorkspaces: (w: WorkspaceSummary[]) => j<{ ok: true }>('/api/workspaces', { method: 'PUT', body: JSON.stringify(w) }),
   remote: () => j<RemoteInfo>('/api/remote'),
   rotateRemote: () => j<RemoteInfo>('/api/remote/rotate', { method: 'POST' }),

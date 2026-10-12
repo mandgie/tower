@@ -8,8 +8,9 @@ import { loadSettings } from './settings.js';
 import { projectName, HOME, APP_DIR } from './config.js';
 import { shQuote } from './shell.js';
 import { trustFolder } from './trust.js';
+import { renameInWorkspaceOps, pruneWorkspaceOps } from './workspaces.js';
 import { sortSessions, buildProjects } from '../shared/snapshot.js';
-import type { Session, Snapshot, Agent, PendingLaunch } from '../shared/types.js';
+import type { Session, Snapshot, Agent, PendingLaunch, Placement } from '../shared/types.js';
 
 const WORKING_WINDOW_MS = 8000;
 
@@ -19,6 +20,23 @@ const pending = new Map<string, PendingLaunch>();
 try { for (const p of JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8')) as PendingLaunch[]) pending.set(p.tmux, p); } catch { /* none */ }
 function savePending(): void {
   fs.writeFile(PENDING_FILE, JSON.stringify([...pending.values()]), () => {});
+}
+
+/** Sessions the phone started that the Mac has not put in a workspace yet (see `Placement`). Keyed by tmux name. */
+const PLACEMENTS_FILE = path.join(APP_DIR, 'placements.json');
+const placements = new Map<string, Placement>();
+try { for (const p of JSON.parse(fs.readFileSync(PLACEMENTS_FILE, 'utf8')) as Placement[]) placements.set(p.tmux, p); } catch { /* none */ }
+function savePlacements(): void {
+  fs.writeFile(PLACEMENTS_FILE, JSON.stringify([...placements.values()]), () => {});
+}
+
+export function placeSession(tmux: string, cwd: string, workspace?: string): void {
+  placements.set(tmux, { tmux, cwd, workspace: typeof workspace === 'string' && workspace ? workspace : undefined, at: Date.now() });
+  savePlacements();
+}
+
+export function clearPlacement(tmux: string): void {
+  if (placements.delete(tmux)) savePlacements();
 }
 
 /**
@@ -39,6 +57,9 @@ async function rename(from: string, to: string): Promise<void> {
   for (const [k, v] of renames) if (v === from) renames.set(k, to);
   renames.set(from, to);
   saveRenames();
+  const placed = placements.get(from);
+  if (placed) { placements.delete(from); placements.set(to, { ...placed, tmux: to }); savePlacements(); }
+  renameInWorkspaceOps(from, to);
 }
 
 /** Forget renames whose target is gone; nothing can follow them any more. */
@@ -71,6 +92,10 @@ export async function buildSnapshot(): Promise<Snapshot> {
 
   const paneRegistry = await reconcilePaneNames(panes, liveClaude);
   pruneRenames(panes);
+  // A placement whose session ended before the Mac saw it has nowhere to go.
+  const alive = new Set(panes.map((p) => p.session));
+  for (const t of placements.keys()) if (!alive.has(t)) clearPlacement(t);
+  pruneWorkspaceOps(alive);
   const paneForKey = new Map<string, TmuxPane>();
   const attachedPanes = new Set<string>();
   for (const p of panes) {
@@ -141,7 +166,7 @@ export async function buildSnapshot(): Promise<Snapshot> {
   const extraDirs = settings.extraProjectDirs.filter((d) => fs.existsSync(d)).map((cwd) => ({ cwd, name: projectName(cwd) }));
   const projects = buildProjects(sessions, extraDirs);
 
-  return { generatedAt: now, sessions, projects, extraDirs, pending: [...pending.values()], renamed: Object.fromEntries(renames) };
+  return { generatedAt: now, sessions, projects, extraDirs, pending: [...pending.values()], renamed: Object.fromEntries(renames), placements: [...placements.values()] };
 }
 
 /** A wakeup this long overdue while the session sits at the prompt was the last one: the tick ran and did not reschedule. */

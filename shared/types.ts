@@ -75,6 +75,8 @@ export interface Snapshot {
   pending: PendingLaunch[];
   renamed: Record<string, string>;  // old tmux name -> current name, for panes that moved
   workspaces?: WorkspaceSummary[];  // the Mac's workspaces, mirrored for the phone
+  placements?: Placement[];         // sessions the phone started, waiting for the Mac to put them in a workspace
+  workspaceOps?: WorkspaceOp[];     // workspace changes made on the phone, waiting for the Mac to apply them
 }
 
 export interface ProjectDir { cwd: string; name: string }
@@ -91,6 +93,8 @@ export interface SnapshotDelta {
   pending?: PendingLaunch[];
   renamed?: Record<string, string>;
   workspaces?: WorkspaceSummary[];
+  placements?: Placement[];
+  workspaceOps?: WorkspaceOp[];
 }
 
 export type SnapshotEvent = { t: 'full'; snapshot: Snapshot } | ({ t: 'delta' } & SnapshotDelta);
@@ -100,6 +104,30 @@ export interface WorkspaceSummary {
   name: string;
   panes: string[];     // tmux names, in grid order
 }
+
+/**
+ * A session started on the phone that should join a workspace. The Mac owns the workspaces, so the phone
+ * only says where it belongs: `workspace` when started from that workspace's chip, else the one working
+ * in the same folder. The desktop adds the pane and clears the entry.
+ */
+export interface Placement {
+  tmux: string;
+  cwd: string;
+  workspace?: string;
+  at: number;
+}
+
+/**
+ * A workspace change made on the phone, as the phone sends it. `move` takes a session out of its
+ * workspace and into `to` (null: into none), creating `to` as `name` when it does not exist yet.
+ */
+export type WorkspaceOpRequest =
+  | { op: 'move'; tmux: string; to: string | null; name?: string }
+  | { op: 'rename'; workspace: string; name: string }
+  | { op: 'close'; workspace: string };
+
+/** A queued phone change. The Mac owns the workspaces, so it applies these in order and clears them; until then the phone shows the outcome itself. */
+export type WorkspaceOp = WorkspaceOpRequest & { id: string; at: number };
 
 export interface PendingLaunch {
   tmux: string;

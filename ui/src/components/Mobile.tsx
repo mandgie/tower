@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import type { Agent, Session, Snapshot, WorkspaceSummary } from '../../../shared/types';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import type { Agent, Session, Snapshot, WorkspaceSummary, WorkspaceOpRequest } from '../../../shared/types';
+import { placementTarget, applyWorkspaceOp } from '../../../shared/snapshot';
 import { api, relTime, useNow, useSnapshot, type LaunchBody } from '../api';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
@@ -77,6 +78,7 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   const { snapshot, connected } = useSnapshot();
   const [key, go] = useHashKey();
   const [newOpen, setNewOpen] = useState(false);
+  const [sheet, setSheet] = useState<Sheet | null>(null);
   const [filter, setFilterState] = useState(() => localStorage.getItem(FILTER_KEY) || 'all');
   const setFilter = (f: string) => { localStorage.setItem(FILTER_KEY, f); setFilterState(f); };
   useVisualViewportHeight();
@@ -89,17 +91,28 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   const scopes = useMemo(() => workspaceScopes(snapshot), [snapshot]);
   const scope = scopes.find((x) => x.id === filter) ?? null;
 
+  const workspaces = scopes.filter((x) => x.id !== 'other');
+  const sheetSession = sheet?.kind === 'session' ? sessions.find((s) => s.key === sheet.key && tmuxOf(s)) : undefined;
+  const sheetWorkspace = sheet?.kind === 'workspace' ? workspaces.find((x) => x.id === sheet.id) : undefined;
+  const menuFor = (s: Session) => setSheet({ kind: 'session', key: s.key });
+
   const launch = async (body: LaunchBody) => {
-    const r = await api.launch(body);
+    // Started from a workspace chip, the session joins that workspace on the Mac; from All, the one in its folder.
+    // Other means outside every workspace, so it stays there.
+    const place = scope?.id === 'other' ? undefined : { workspace: scope?.id };
+    const r = await api.launch({ ...body, place });
     setNewOpen(false);
     if (r.key) go(r.key);
   };
 
   return (
     <div className="m-app">
-      {key && session ? <SessionView s={session} connected={connected} onBack={() => go(null)} />
+      {key && session ? <SessionView s={session} connected={connected} onBack={() => go(null)} onMenu={() => menuFor(session)} />
         : key && snapshot ? <div className="m-empty"><p>That session is gone.</p><button className="btn" onClick={() => go(null)}>Back to the list</button></div>
-        : <SessionList sessions={sessions} scopes={scopes} scope={scope} onScope={setFilter} loaded={!!snapshot} connected={connected} onOpen={(s) => go(s.key)} onNew={() => setNewOpen(true)} onDesktop={onDesktop} />}
+        : <SessionList sessions={sessions} scopes={scopes} scope={scope} onScope={setFilter} loaded={!!snapshot} connected={connected} onOpen={(s) => go(s.key)} onMenu={menuFor} onScopeMenu={(id) => setSheet({ kind: 'workspace', id })} onNew={() => setNewOpen(true)} onDesktop={onDesktop} />}
+      {sheetSession && <SessionSheet s={sheetSession} workspaces={workspaces} onClose={() => setSheet(null)}
+        onKilled={() => { setSheet(null); if (key === sheetSession.key) go(null); }} />}
+      {sheetWorkspace && <WorkspaceSheet w={sheetWorkspace} onClose={() => setSheet(null)} />}
       {newOpen && <NewSession preset={scope?.cwd ? { cwd: scope.cwd } : {}} projects={snapshot?.projects ?? []} onClose={() => setNewOpen(false)} onLaunch={launch} />}
     </div>
   );
@@ -124,11 +137,23 @@ const tmuxOf = (s: Session) => (s.live?.kind === 'tmux' ? s.live.tmux : null);
 const keyOfTmux = (tmux: string) => tmux.replace(/^ms-(claude|codex)-/, '$1:');
 
 function workspaceScopes(snapshot: Snapshot | null): Scope[] {
-  const all = snapshot?.workspaces ?? [];
-  if (!snapshot || !all.length) return [];
+  if (!snapshot) return [];
   const renamed = snapshot.renamed ?? {};
   const follow = (t: string) => { for (let i = 0; i < 8 && renamed[t]; i++) t = renamed[t]; return t; };
   const sessions = snapshot.sessions;
+  // Show a session the phone just started in its workspace now, rather than once the Mac has placed it.
+  const cwdOf = new Map(sessions.flatMap((s) => (tmuxOf(s) ? [[tmuxOf(s)!, s.cwd] as const] : [])));
+  let all = (snapshot.workspaces ?? []).map((w) => ({ ...w, panes: w.panes.map(follow) }));
+  for (const p of snapshot.placements ?? []) {
+    if (all.some((w) => w.panes.includes(p.tmux))) continue;
+    const id = placementTarget(p, all, (t) => cwdOf.get(t));
+    if (id) all = all.map((w) => (w.id === id ? { ...w, panes: [...w.panes, p.tmux] } : w));
+  }
+  // Likewise for moves, renames and closes made here that the Mac has not applied yet.
+  for (const op of snapshot.workspaceOps ?? []) {
+    all = applyWorkspaceOp<string, WorkspaceSummary>(all, op, { tmuxOf: (t) => t, pane: (t) => (cwdOf.has(t) ? t : null), create: (id, name) => ({ id, name, panes: [] }) });
+  }
+  if (!all.some((w) => w.panes.length)) return [];
   const claimed = new Set<string>();
   const make = (id: string, name: string, has: (s: Session) => boolean): Scope => {
     const members = sessions.filter(has).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -149,14 +174,10 @@ function workspaceScopes(snapshot: Snapshot | null): Scope[] {
   return other.live ? [...scopes, other] : scopes;
 }
 
-function ScopeChips({ scopes, scope, total, onScope }: { scopes: Scope[]; scope: Scope | null; total: { live: number; waiting: number }; onScope: (id: string) => void }) {
+function ScopeChips({ scopes, scope, total, onScope, onMenu }: { scopes: Scope[]; scope: Scope | null; total: { live: number; waiting: number }; onScope: (id: string) => void; onMenu: (id: string) => void }) {
   if (!scopes.length) return null;
   const chip = (id: string, name: string, live: number, waiting: number, on: boolean) => (
-    <button key={id} role="tab" aria-selected={on} className={`m-chip ${on ? 'on' : ''} ${id === 'other' ? 'other' : ''}`} onClick={() => onScope(id)}>
-      {waiting > 0 && <span className="m-chip-wait" aria-label={`${waiting} waiting`} />}
-      <span className="m-chip-name">{name}</span>
-      {live > 0 && <span className="m-chip-count">{live}</span>}
-    </button>
+    <Chip key={id} id={id} name={name} live={live} waiting={waiting} on={on} onScope={onScope} onMenu={id === 'all' || id === 'other' ? undefined : onMenu} />
   );
   return (
     <div className="m-chips" role="tablist" aria-label="Workspace">
@@ -166,11 +187,26 @@ function ScopeChips({ scopes, scope, total, onScope }: { scopes: Scope[]; scope:
   );
 }
 
+/** A workspace chip; a long press opens Rename and Close. */
+function Chip({ id, name, live, waiting, on, onScope, onMenu }: {
+  id: string; name: string; live: number; waiting: number; on: boolean; onScope: (id: string) => void; onMenu?: (id: string) => void;
+}) {
+  const press = useLongPress(onMenu ? () => onMenu(id) : undefined);
+  return (
+    <button role="tab" aria-selected={on} className={`m-chip ${on ? 'on' : ''} ${id === 'other' ? 'other' : ''}`} onClick={() => onScope(id)} {...press}>
+      {waiting > 0 && <span className="m-chip-wait" aria-label={`${waiting} waiting`} />}
+      <span className="m-chip-name">{name}</span>
+      {live > 0 && <span className="m-chip-count">{live}</span>}
+    </button>
+  );
+}
+
 // ---- list ------------------------------------------------------------------------------------
 
-function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOpen, onNew, onDesktop }: {
+function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOpen, onMenu, onScopeMenu, onNew, onDesktop }: {
   sessions: Session[]; scopes: Scope[]; scope: Scope | null; onScope: (id: string) => void;
-  loaded: boolean; connected: boolean; onOpen: (s: Session) => void; onNew: () => void; onDesktop: () => void;
+  loaded: boolean; connected: boolean; onOpen: (s: Session) => void; onMenu: (s: Session) => void; onScopeMenu: (id: string) => void;
+  onNew: () => void; onDesktop: () => void;
 }) {
   const now = useNow();
   const [recentShown, setRecentShown] = useState(RECENT_PAGE);
@@ -202,15 +238,15 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
         </span>
         <button className="m-icon-btn" onClick={onNew} aria-label="New session">+</button>
       </header>
-      <ScopeChips scopes={scopes} scope={scope} total={total} onScope={onScope} />
+      <ScopeChips scopes={scopes} scope={scope} total={total} onScope={onScope} onMenu={onScopeMenu} />
       <div className="m-scroll">
         {!loaded && <div className="m-note">Reading sessions…</div>}
-        <Group title="Needs you" rows={groups.waiting} now={now} onOpen={onOpen} />
-        <Group title="Working" rows={groups.working} now={now} onOpen={onOpen} />
-        <Group title="Looping" rows={groups.looping} now={now} onOpen={onOpen} />
-        <Group title="Open" rows={groups.open} now={now} onOpen={onOpen} />
+        <Group title="Needs you" rows={groups.waiting} now={now} onOpen={onOpen} onMenu={onMenu} />
+        <Group title="Working" rows={groups.working} now={now} onOpen={onOpen} onMenu={onMenu} />
+        <Group title="Looping" rows={groups.looping} now={now} onOpen={onOpen} onMenu={onMenu} />
+        <Group title="Open" rows={groups.open} now={now} onOpen={onOpen} onMenu={onMenu} />
         {loaded && !groups.waiting.length && !groups.working.length && !groups.looping.length && !groups.open.length && <div className="m-note">{scope ? `Nothing running in ${scope.name}.` : 'No live sessions.'} Resume one below or start a new one with +.</div>}
-        <Group title={scope && scope.id !== 'other' ? `Recent in ${scope.name}` : 'Recent'} rows={groups.recent.slice(0, recentShown)} now={now} onOpen={onOpen} />
+        <Group title={scope && scope.id !== 'other' ? `Recent in ${scope.name}` : 'Recent'} rows={groups.recent.slice(0, recentShown)} now={now} onOpen={onOpen} onMenu={onMenu} />
         {groups.recent.length > recentShown && <button className="btn ghost wide" onClick={() => setRecentShown((n) => n + RECENT_PAGE * 2)}>Show more</button>}
         <button className="m-layout-link" onClick={onDesktop}>Use the desktop layout</button>
       </div>
@@ -218,30 +254,172 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
   );
 }
 
-function Group({ title, rows, now, onOpen }: { title: string; rows: Session[]; now: number; onOpen: (s: Session) => void }) {
+function Group({ title, rows, now, onOpen, onMenu }: { title: string; rows: Session[]; now: number; onOpen: (s: Session) => void; onMenu: (s: Session) => void }) {
   if (!rows.length) return null;
   return (
     <section className="m-group">
       <h3>{title}<span>{rows.length}</span></h3>
-      {rows.map((s) => (
-        <button key={s.key} className={`m-row agent-${s.agent} status-${s.status} ${s.live ? 'live' : ''}`} onClick={() => onOpen(s)}>
-          <span className="rail" />
-          <span className="m-row-main">
-            <span className="m-row-title">{s.title || 'Untitled'}</span>
-            <span className="m-row-meta">
-              <span>{s.project}</span>
-              {s.gitBranch && s.gitBranch !== 'HEAD' && <span className="branch">{s.gitBranch}</span>}
-              {s.live && <LoopBadge session={s} />}
-              {s.live && <ContextBadge session={s} />}
-            </span>
-          </span>
-          <span className="m-row-side">
-            {s.live && <span className={`m-status status-${s.status}`}>{s.live.kind === 'external' ? 'terminal' : statusWord(s.status) || 'idle'}</span>}
-            <time>{relTime(s.updatedAt, now)}</time>
-          </span>
+      {rows.map((s) => <Row key={s.key} s={s} now={now} onOpen={onOpen} onMenu={tmuxOf(s) ? onMenu : undefined} />)}
+    </section>
+  );
+}
+
+/** A session row; a long press on one running in Tower opens its actions. */
+function Row({ s, now, onOpen, onMenu }: { s: Session; now: number; onOpen: (s: Session) => void; onMenu?: (s: Session) => void }) {
+  const press = useLongPress(onMenu ? () => onMenu(s) : undefined);
+  return (
+    <button className={`m-row agent-${s.agent} status-${s.status} ${s.live ? 'live' : ''}`} onClick={() => onOpen(s)} {...press}>
+      <span className="rail" />
+      <span className="m-row-main">
+        <span className="m-row-title">{s.title || 'Untitled'}</span>
+        <span className="m-row-meta">
+          <span>{s.project}</span>
+          {s.gitBranch && s.gitBranch !== 'HEAD' && <span className="branch">{s.gitBranch}</span>}
+          {s.live && <LoopBadge session={s} />}
+          {s.live && <ContextBadge session={s} />}
+        </span>
+      </span>
+      <span className="m-row-side">
+        {s.live && <span className={`m-status status-${s.status}`}>{s.live.kind === 'external' ? 'terminal' : statusWord(s.status) || 'idle'}</span>}
+        <time>{relTime(s.updatedAt, now)}</time>
+      </span>
+    </button>
+  );
+}
+
+// ---- workspace actions -----------------------------------------------------------------------
+
+/**
+ * The phone's version of what the desktop does with tabs and panes: move a session between workspaces,
+ * start a workspace, rename or close one, kill a session. Workspace changes go to the Mac as requests
+ * (see WorkspaceOp); kill goes straight to tmux.
+ */
+type Sheet = { kind: 'session'; key: string } | { kind: 'workspace'; id: string };
+
+const newWorkspaceId = () => Math.random().toString(36).slice(2, 10);
+
+/** Long press (or right click) calls `onLong`, and the click that ends the press is swallowed. */
+function useLongPress(onLong?: () => void, ms = 450) {
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const fired = useRef(false);
+  if (!onLong) return {};
+  const cancel = () => { clearTimeout(timer.current); start.current = null; };
+  const fire = () => { cancel(); fired.current = true; navigator.vibrate?.(10); onLong(); };
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      fired.current = false; start.current = { x: e.clientX, y: e.clientY };
+      timer.current = setTimeout(fire, ms);
+    },
+    // A scroll or swipe is not a press.
+    onPointerMove: (e: React.PointerEvent) => { const p = start.current; if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 8) cancel(); },
+    onPointerUp: cancel, onPointerCancel: cancel, onPointerLeave: cancel,
+    onContextMenu: (e: React.MouseEvent) => { e.preventDefault(); if (!fired.current) fire(); },
+    onClickCapture: (e: React.MouseEvent) => { if (fired.current) { e.preventDefault(); e.stopPropagation(); fired.current = false; } },
+  };
+}
+
+function ActionSheet({ title, sub, onClose, children }: { title: string; sub?: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', on);
+    return () => window.removeEventListener('keydown', on);
+  }, [onClose]);
+  return (
+    <div className="m-sheet-back" onClick={onClose}>
+      <div className="m-sheet" role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
+        <div className="m-sheet-grip" />
+        <div className="m-sheet-head">
+          <span className="m-sheet-title">{title}</span>
+          {sub && <span className="m-sheet-sub">{sub}</span>}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const Check = () => (
+  <svg className="m-sheet-check" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m3.5 9.5 3.5 3.5 7.5-8" /></svg>
+);
+
+function NameForm({ initial, action, onSubmit }: { initial: string; action: string; onSubmit: (name: string) => void }) {
+  const [name, setName] = useState(initial);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
+  return (
+    <form className="m-sheet-form" onSubmit={(e) => { e.preventDefault(); if (name.trim()) onSubmit(name.trim()); }}>
+      <input ref={ref} value={name} onChange={(e) => setName(e.target.value)} placeholder="Workspace name" maxLength={60} aria-label="Workspace name" />
+      <button type="submit" className="btn primary" disabled={!name.trim()}>{action}</button>
+    </form>
+  );
+}
+
+function SessionSheet({ s, workspaces, onClose, onKilled }: { s: Session; workspaces: Scope[]; onClose: () => void; onKilled: () => void }) {
+  const tmux = tmuxOf(s)!;
+  const current = workspaces.find((w) => w.has(s));
+  const [naming, setNaming] = useState(false);
+  const [killing, setKilling] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async (fn: () => Promise<unknown>, then: () => void) => {
+    setErr(null);
+    try { await fn(); then(); } catch (e) { setErr((e as Error).message); }
+  };
+  const move = (to: string | null, name?: string) => run(() => api.workspaceOp({ op: 'move', tmux, to, ...(name ? { name } : {}) }), onClose);
+
+  return (
+    <ActionSheet title={s.title || 'Untitled'} sub={`${s.project} · ${current ? current.name : 'in no workspace'}`} onClose={onClose}>
+      <h4>Move to</h4>
+      {workspaces.map((w) => (
+        <button key={w.id} className={`m-sheet-item ${w === current ? 'on' : ''}`} onClick={() => (w === current ? onClose() : move(w.id))}>
+          <span className="m-sheet-label">{w.name}</span>
+          {w === current && <Check />}
         </button>
       ))}
-    </section>
+      {naming
+        ? <NameForm initial={s.project} action="Create" onSubmit={(name) => move(newWorkspaceId(), name)} />
+        : <button className="m-sheet-item accent" onClick={() => setNaming(true)}>New workspace…</button>}
+      {current && <button className="m-sheet-item muted" onClick={() => move(null)}>Remove from {current.name}</button>}
+      <div className="m-sheet-sep" />
+      {killing ? (
+        <div className="m-sheet-confirm">
+          <p>Stop this session? The conversation stays under Recent and can be resumed.</p>
+          <div className="m-sheet-actions">
+            <button className="btn ghost" onClick={() => setKilling(false)}>Cancel</button>
+            <button className="btn danger armed" onClick={() => run(() => api.kill(tmux), onKilled)}>Kill session</button>
+          </div>
+        </div>
+      ) : <button className="m-sheet-item danger" onClick={() => setKilling(true)}>Kill session…</button>}
+      {err && <p className="m-err m-sheet-err">{err}</p>}
+    </ActionSheet>
+  );
+}
+
+function WorkspaceSheet({ w, onClose }: { w: Scope; onClose: () => void }) {
+  const [naming, setNaming] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const send = async (op: WorkspaceOpRequest) => {
+    setErr(null);
+    try { await api.workspaceOp(op); onClose(); } catch (e) { setErr((e as Error).message); }
+  };
+  return (
+    <ActionSheet title={w.name} sub={`Workspace · ${w.live} running`} onClose={onClose}>
+      {naming
+        ? <NameForm initial={w.name} action="Rename" onSubmit={(name) => send({ op: 'rename', workspace: w.id, name })} />
+        : <button className="m-sheet-item" onClick={() => setNaming(true)}>Rename…</button>}
+      {closing ? (
+        <div className="m-sheet-confirm">
+          <p>Close {w.name}? Its sessions keep running and move to Other.</p>
+          <div className="m-sheet-actions">
+            <button className="btn ghost" onClick={() => setClosing(false)}>Cancel</button>
+            <button className="btn danger armed" onClick={() => send({ op: 'close', workspace: w.id })}>Close workspace</button>
+          </div>
+        </div>
+      ) : <button className="m-sheet-item danger" onClick={() => setClosing(true)}>Close workspace…</button>}
+      {err && <p className="m-err m-sheet-err">{err}</p>}
+    </ActionSheet>
   );
 }
 
@@ -249,7 +427,7 @@ function Group({ title, rows, now, onOpen }: { title: string; rows: Session[]; n
 
 type Tab = 'chat' | 'screen' | 'term';
 
-function SessionView({ s, connected, onBack }: { s: Session; connected: boolean; onBack: () => void }) {
+function SessionView({ s, connected, onBack, onMenu }: { s: Session; connected: boolean; onBack: () => void; onMenu: () => void }) {
   const tmux = s.live?.kind === 'tmux' && !s.live.dead ? s.live.tmux : null;
   const [tab, setTab] = useState<Tab>(() => localStorage.getItem(TAB_KEY) === 'screen' ? 'screen' : 'chat');
   const shown: Tab = !tmux && tab !== 'chat' ? 'chat' : tab;
@@ -260,7 +438,7 @@ function SessionView({ s, connected, onBack }: { s: Session; connected: boolean;
 
   const resume = async () => {
     setResuming(true); setErr(null);
-    try { await api.resume(s.agent, s.id, { skipPermissions: skipPerms() }); }
+    try { await api.resume(s.agent, s.id, { skipPermissions: skipPerms(), place: {} }); }
     catch (e) { setErr((e as Error).message); }
     finally { setResuming(false); }
   };
@@ -279,6 +457,11 @@ function SessionView({ s, connected, onBack }: { s: Session; connected: boolean;
           </span>
         </div>
         {s.live && <ContextBadge session={s} />}
+        {tmuxOf(s) && (
+          <button className="m-back m-more" onClick={onMenu} aria-label="Session actions">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><circle cx="4" cy="10" r="1.8" /><circle cx="10" cy="10" r="1.8" /><circle cx="16" cy="10" r="1.8" /></svg>
+          </button>
+        )}
       </header>
       {tmux && (
         <div className="seg m-tabs" role="tablist">

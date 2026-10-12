@@ -4,13 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { PORT } from './config.js';
-import { buildSnapshot, launchNew, resumeSession, closeTmux, listProjectDirs, folderInfo } from './sessions.js';
+import { buildSnapshot, launchNew, resumeSession, closeTmux, listProjectDirs, folderInfo, placeSession, clearPlacement } from './sessions.js';
 import { claudeTranscript } from './claude.js';
 import { codexTranscript } from './codex.js';
 import { ensureServer, capturePane, sendKeys, pressKeys, paneModes, scrollPane } from './tmux.js';
 import { attachTerminal } from './pty.js';
 import { loadSettings, saveSettings } from './settings.js';
-import { loadWorkspaces, saveWorkspaces } from './workspaces.js';
+import { loadWorkspaces, saveWorkspaces, workspaceOps, addWorkspaceOp, clearWorkspaceOp } from './workspaces.js';
 import { runDoctor, doctorSummary } from './doctor.js';
 import { applyRemote, remoteInfo, rotateToken, isPaired, isLoopback, peerAllowed, originMatchesHost, handlePair, unpairedPage } from './remote.js';
 import type { Snapshot, SnapshotDelta } from '../shared/types.js';
@@ -36,7 +36,7 @@ const remoteSockets = new Set<WebSocket>();
 let refreshing = false;
 let refreshQueued = false;
 
-const DELTA_FIELDS = ['extraDirs', 'pending', 'renamed', 'workspaces'] as const;
+const DELTA_FIELDS = ['extraDirs', 'pending', 'renamed', 'workspaces', 'placements', 'workspaceOps'] as const;
 
 async function refresh(): Promise<Snapshot> {
   if (refreshing) { refreshQueued = true; return snapshot; }
@@ -44,6 +44,7 @@ async function refresh(): Promise<Snapshot> {
   try {
     const next = await buildSnapshot();
     next.workspaces = loadWorkspaces();
+    next.workspaceOps = workspaceOps();
     const delta: SnapshotDelta = { generatedAt: next.generatedAt, upsert: [], remove: [] };
     const sessions = new Map<string, string>();
     for (const s of next.sessions) {
@@ -116,6 +117,29 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       refresh();
       return json(res, 200, { ok: true });
     }
+    if (m === 'POST' && p === '/api/workspaces/ops') {
+      // The phone asks; the Mac applies (see WorkspaceOp). An explicit move replaces an automatic placement.
+      let op;
+      try { op = addWorkspaceOp(await readBody(req)); } catch (e) { return json(res, 400, { error: (e as Error).message }); }
+      if (op.op === 'move') clearPlacement(op.tmux);
+      refresh();
+      return json(res, 200, op);
+    }
+    const doneOp = p.match(/^\/api\/workspaces\/ops\/([^/]+)$/);
+    if (m === 'DELETE' && doneOp) {
+      if (remote) return json(res, 403, { error: 'Only available on the Mac' });
+      clearWorkspaceOp(decodeURIComponent(doneOp[1]));
+      refresh();
+      return json(res, 200, { ok: true });
+    }
+    const placed = p.match(/^\/api\/placements\/([^/]+)$/);
+    if (m === 'DELETE' && placed) {
+      // The desktop clears a placement once the pane is in a workspace.
+      if (remote) return json(res, 403, { error: 'Only available on the Mac' });
+      clearPlacement(decodeURIComponent(placed[1]));
+      refresh();
+      return json(res, 200, { ok: true });
+    }
     if (m === 'GET' && p === '/api/projects/dirs') return json(res, 200, { dirs: listProjectDirs() });
     if (m === 'GET' && p === '/api/folder') return json(res, 200, folderInfo(url.searchParams.get('path') || ''));
     if (m === 'GET' && p === '/api/doctor') return json(res, 200, await runDoctor());
@@ -133,6 +157,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       if (m === 'POST') {
         const body = await readBody(req);
         const r = await resumeSession(s, { skipPermissions: body.skipPermissions, fork: mm[3] === 'fork' });
+        if (body.place) placeSession(r.tmux, s.cwd, body.place.workspace);
         setTimeout(refresh, 300);
         return json(res, 200, r);
       }
@@ -140,6 +165,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     if (m === 'POST' && p === '/api/sessions/new') {
       const body = await readBody(req);
       const r = await launchNew(body);
+      // launchNew resolves body.cwd in place (~, new folders), so the placement matches the session's folder.
+      if (body.place) placeSession(r.tmux, body.cwd, body.place.workspace);
       setTimeout(refresh, 300);
       return json(res, 200, r);
     }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session, Agent, DoctorResult } from '../../shared/types';
+import { placementTarget, applyWorkspaceOp } from '../../shared/snapshot';
 import { api, useSnapshot, type LaunchBody } from './api';
 import { StatusStrip } from './components/StatusStrip';
 import { Sidebar } from './components/Sidebar';
@@ -140,6 +141,44 @@ export function App() {
       if (focusMoved !== undefined) setFocused(focusMoved);
       if (selectedMoved !== undefined) setSelectedKey(selectedMoved);
     }
+  }, [snapshot]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sessions started on the phone join a workspace here, without taking focus or switching workspace.
+  useEffect(() => {
+    const ready = (snapshot?.placements ?? []).filter((p) => byTmux.has(p.tmux));
+    if (!ready.length) return;
+    updateWs((ws) => {
+      let next = ws;
+      for (const p of ready) {
+        if (next.some((w) => w.panes.some((x) => x.tmux === p.tmux))) continue;
+        const id = placementTarget(p, next.map((w) => ({ id: w.id, name: w.name, panes: w.panes.map((x) => x.tmux) })), (t) => byTmux.get(t)?.cwd);
+        if (!id) continue;
+        const pane = { tmux: p.tmux, agent: byTmux.get(p.tmux)!.agent, openedAt: Date.now() };
+        next = next.map((w) => (w.id === id ? { ...w, panes: [...w.panes, pane] } : w));
+      }
+      return { workspaces: next };
+    });
+    for (const p of ready) api.clearPlacement(p.tmux).catch(() => {});
+  }, [snapshot]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Workspace changes made on the phone, in the order they were made. A move waits until its session runs.
+  useEffect(() => {
+    const ready = (snapshot?.workspaceOps ?? []).filter((op) => op.op !== 'move' || byTmux.has(op.tmux));
+    if (!ready.length) return;
+    updateWs((ws) => {
+      let next = ws;
+      for (const op of ready) {
+        next = applyWorkspaceOp<Pane, Workspace>(next, op, {
+          tmuxOf: (p) => p.tmux,
+          pane: (tmux) => { const s = byTmux.get(tmux); return s ? { tmux, agent: s.agent, openedAt: Date.now() } : null; },
+          create: (id, name) => ({ id, name, auto: false, panes: [] }),
+        });
+        // A name given on the phone is the user's, so the first session's project must not replace it.
+        if (op.op === 'rename') next = next.map((w) => (w.id === op.workspace ? { ...w, auto: false } : w));
+      }
+      return { workspaces: next };
+    });
+    for (const op of ready) api.clearWorkspaceOp(op.id).catch(() => {});
   }, [snapshot]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selected = selectedKey ? byKey.get(selectedKey) ?? null : null;
