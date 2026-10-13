@@ -109,15 +109,24 @@ export async function renameSession(from: string, to: string): Promise<void> {
  * Types `text` into the pane as a bracketed paste, so newlines stay in the prompt instead of submitting
  * it, then presses Enter as its own key. (`send-keys -l text Enter` would type the word "Enter".)
  */
-export async function sendKeys(name: string, text: string, enter = true): Promise<void> {
+export async function sendKeys(name: string, text: string, enter = true, files: string[] = []): Promise<void> {
   const target = `=${name}:`;
+  // Each file path is its own paste, as if dropped on the terminal, so the agent turns it into an attachment.
+  for (const f of files) {
+    const buf = `tower-${process.pid}-${Date.now()}`;
+    await tmux(['set-buffer', '-b', buf, '--', `${f} `]);
+    await tmux(['paste-buffer', '-p', '-d', '-b', buf, '-t', target]);
+    await new Promise((r) => setTimeout(r, 250));
+  }
   if (text) {
     const buf = `tower-${process.pid}-${Date.now()}`;
-    await tmux(['set-buffer', '-b', buf, '--', text]);
+    // The agent swallows the space after an attachment, so put one back before the message.
+    await tmux(['set-buffer', '-b', buf, '--', files.length ? ` ${text}` : text]);
     await tmux(['paste-buffer', '-p', '-d', '-b', buf, '-t', target]);
     // Give the agent's input box a moment to take the paste, or Enter can land inside it.
     if (enter) await new Promise((r) => setTimeout(r, 150));
   }
+  if (enter && files.length && !text) await new Promise((r) => setTimeout(r, 150));
   if (enter) await tmux(['send-keys', '-t', target, 'Enter']);
 }
 

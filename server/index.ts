@@ -10,6 +10,7 @@ import { codexTranscript } from './codex.js';
 import { ensureServer, capturePane, sendKeys, pressKeys, paneModes, scrollPane } from './tmux.js';
 import { attachTerminal } from './pty.js';
 import { loadSettings, saveSettings } from './settings.js';
+import { saveUpload, isUpload, uploadFile } from './uploads.js';
 import { loadWorkspaces, saveWorkspaces, workspaceOps, addWorkspaceOp, clearWorkspaceOp } from './workspaces.js';
 import { runDoctor, doctorSummary } from './doctor.js';
 import { applyRemote, remoteInfo, rotateToken, isPaired, isLoopback, peerAllowed, originMatchesHost, handlePair, unpairedPage } from './remote.js';
@@ -140,6 +141,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       refresh();
       return json(res, 200, { ok: true });
     }
+    const up = m === 'GET' && p.match(/^\/api\/uploads\/([\w.-]+)$/);
+    if (up) {
+      const f = uploadFile(up[1]);
+      if (!f) return json(res, 404, { error: 'Not found' });
+      res.writeHead(200, { 'content-type': f.type, 'cache-control': 'private, max-age=604800, immutable' });
+      fs.createReadStream(f.file).pipe(res);
+      return;
+    }
+    if (m === 'POST' && p === '/api/uploads') {
+      // A picture from the phone, sent as raw bytes with its image type.
+      try { return json(res, 200, { path: await saveUpload(req) }); } catch (e) { return json(res, 400, { error: (e as Error).message }); }
+    }
     if (m === 'GET' && p === '/api/projects/dirs') return json(res, 200, { dirs: listProjectDirs() });
     if (m === 'GET' && p === '/api/folder') return json(res, 200, folderInfo(url.searchParams.get('path') || ''));
     if (m === 'GET' && p === '/api/doctor') return json(res, 200, await runDoctor());
@@ -179,7 +192,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         return json(res, 200, { text: await capturePane(name, Number(url.searchParams.get('lines') || 60)), ...modes });
       }
       if (mm[2] === 'scroll' && m === 'POST') { const b = await readBody(req); await scrollPane(name, Number(b.lines) || 0); return json(res, 200, { ok: true }); }
-      if (mm[2] === 'send' && m === 'POST') { const b = await readBody(req); await sendKeys(name, String(b.text || ''), b.enter !== false); setTimeout(refresh, 300); return json(res, 200, { ok: true }); }
+      if (mm[2] === 'send' && m === 'POST') {
+        const b = await readBody(req);
+        const files = Array.isArray(b.files) ? b.files.filter(isUpload) : [];
+        await sendKeys(name, String(b.text || ''), b.enter !== false, files);
+        setTimeout(refresh, 300);
+        return json(res, 200, { ok: true });
+      }
       if (mm[2] === 'keys' && m === 'POST') { const b = await readBody(req); await pressKeys(name, Array.isArray(b.keys) ? b.keys.map(String) : []); setTimeout(refresh, 300); return json(res, 200, { ok: true }); }
     }
     json(res, 404, { error: 'Not found' });

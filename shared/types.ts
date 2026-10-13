@@ -140,7 +140,8 @@ export type Block =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
   | { type: 'tool_use'; name: string; input: string }
-  | { type: 'tool_result'; text: string; isError?: boolean };
+  | { type: 'tool_result'; text: string; isError?: boolean }
+  | { type: 'image'; url?: string };  // url only for pictures sent from the phone, which the server can serve
 
 export interface Message {
   role: 'user' | 'assistant' | 'system';

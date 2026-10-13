@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { CLAUDE_DIR, APP_DIR, projectName } from './config.js';
+import { uploadUrl } from './uploads.js';
 import type { Session, Message, Block, SessionStats, SessionLoop } from '../shared/types.js';
 
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -398,7 +399,17 @@ export async function claudeTranscript(file: string): Promise<{ messages: Messag
         for (const b of c) {
           if (b.type === 'text' && b.text?.trim()) blocks.push({ type: 'text', text: b.text });
           else if (b.type === 'tool_result') blocks.push({ type: 'tool_result', text: resultText(b.content).slice(0, 4000), isError: !!b.is_error });
+          else if (b.type === 'image') blocks.push({ type: 'image' });
         }
+      }
+      // Claude Code follows a message with attached files by a hidden record naming each file. Give the
+      // pictures to that message instead of showing the record.
+      const sources = r.isMeta ? imageSources(c) : null;
+      if (sources) {
+        const prev = msgs[msgs.length - 1];
+        const imgs = prev?.role === 'user' ? prev.blocks.filter((b) => b.type === 'image') : [];
+        sources.forEach((src, i) => { if (imgs[i]) imgs[i].url = uploadUrl(src); });
+        continue;
       }
       if (blocks.length) msgs.push({ role: 'user', ts, blocks });
     } else if (r.type === 'assistant') {
@@ -424,4 +435,16 @@ export async function claudeTranscript(file: string): Promise<{ messages: Messag
   }
   try { stats.bytes = fs.statSync(file).size; } catch { /* ignore */ }
   return { messages: msgs, stats };
+}
+
+/** The paths in Claude Code's `[Image: source: <path>]` record, or null when the record is anything else. */
+function imageSources(c: unknown): string[] | null {
+  if (!Array.isArray(c) || !c.length) return null;
+  const out: string[] = [];
+  for (const b of c) {
+    const m = b?.type === 'text' && typeof b.text === 'string' ? b.text.match(/^\[Image: source: (.+)\]$/) : null;
+    if (!m) return null;
+    out.push(m[1]);
+  }
+  return out;
 }

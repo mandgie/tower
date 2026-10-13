@@ -52,7 +52,7 @@ export function Transcript({ session, compact }: { session: Session; compact?: b
   if (!data) return <div className="transcript"><div className="notice muted">Reading transcript…</div></div>;
 
   const { messages, stats } = data;
-  const visible = showTools ? messages : messages.filter((m) => m.blocks.some((b) => b.type === 'text' || b.type === 'thinking'));
+  const visible = showTools ? messages : messages.filter((m) => m.blocks.some((b) => b.type === 'text' || b.type === 'thinking' || b.type === 'image'));
   const start = Math.max(0, visible.length - limit);
   const slice = visible.slice(start);
 
@@ -145,6 +145,9 @@ function Msg({ m, agent }: { m: Message; agent: Session['agent'] }) {
 function BlockView({ b }: { b: Block }) {
   const [open, setOpen] = useState(false);
   if (b.type === 'text') return <div className="blk text">{b.text}</div>;
+  if (b.type === 'image') return b.url
+    ? <a className="blk-img" href={b.url} target="_blank" rel="noreferrer"><img src={b.url} alt="Attached picture" loading="lazy" /></a>
+    : <span className="blk-img none">Picture</span>;
   if (b.type === 'thinking') return (
     <details className="blk thinking"><summary>Thinking</summary><div>{b.text}</div></details>
   );

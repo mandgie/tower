@@ -56,19 +56,29 @@ function useHashKey(): [string | null, (key: string | null) => void] {
   return [key, go];
 }
 
-/** iOS keeps the layout viewport when the keyboard opens; size the app to the visible part instead. */
+/**
+ * iOS keeps the layout viewport when the keyboard opens; size the app to the visible part instead, and say so
+ * with `kb-open` so the dock can drop the home-bar inset the keyboard covers.
+ */
 function useVisualViewportHeight() {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
+    const root = document.documentElement;
     const on = () => {
-      document.documentElement.style.setProperty('--vvh', `${vv.height}px`);
+      const kb = vv.height < window.innerHeight - 80;
+      root.classList.toggle('kb-open', kb);
+      if (kb) root.style.setProperty('--vvh', `${vv.height}px`);
+      else root.style.removeProperty('--vvh');
       if (vv.offsetTop) window.scrollTo(0, 0);
     };
     on();
     vv.addEventListener('resize', on);
     vv.addEventListener('scroll', on);
-    return () => { vv.removeEventListener('resize', on); vv.removeEventListener('scroll', on); };
+    return () => {
+      vv.removeEventListener('resize', on); vv.removeEventListener('scroll', on);
+      root.classList.remove('kb-open'); root.style.removeProperty('--vvh');
+    };
   }, []);
 }
 
@@ -614,12 +624,21 @@ const KEYS: { label: string; keys: string[]; title: string }[] = [
   { label: '^C', keys: ['C-c'], title: 'Ctrl+C: clear the input, or interrupt' },
 ];
 
+/** A picture picked on the phone: shown from memory right away, uploaded to the Mac in the background. */
+interface Attachment { id: number; url: string; path?: string; error?: string; noPreview?: boolean }
+let attachmentIds = 0;
+
 /** Keys and composer. In the Terminal tab only the keys show: the iOS keyboard has no Esc or arrows, and typing goes into xterm. */
 function Dock({ tmux, keysOnly }: { tmux: string; keysOnly?: boolean }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+  const [atts, setAtts] = useState<Attachment[]>([]);
   const ta = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const attsRef = useRef(atts);
+  attsRef.current = atts;
+  useEffect(() => () => { for (const a of attsRef.current) URL.revokeObjectURL(a.url); }, []);
 
   // Grow with the text up to about six lines.
   useLayoutEffect(() => {
@@ -630,11 +649,30 @@ function Dock({ tmux, keysOnly }: { tmux: string; keysOnly?: boolean }) {
   }, [text]);
 
   const note = (m: string) => { setFlash(m); setTimeout(() => setFlash(null), 1200); };
+  const attach = (files: FileList | null) => {
+    for (const f of Array.from(files ?? [])) {
+      const a: Attachment = { id: ++attachmentIds, url: URL.createObjectURL(f) };
+      setAtts((cur) => [...cur, a]);
+      api.upload(f)
+        .then((r) => setAtts((cur) => cur.map((x) => (x.id === a.id ? { ...x, path: r.path } : x))))
+        .catch((e) => setAtts((cur) => cur.map((x) => (x.id === a.id ? { ...x, error: (e as Error).message } : x))));
+    }
+  };
+  const detach = (id: number) => setAtts((cur) => cur.filter((x) => { if (x.id === id) URL.revokeObjectURL(x.url); return x.id !== id; }));
+  const uploading = atts.some((a) => !a.path && !a.error);
+  const failed = atts.find((a) => a.error);
   const send = async () => {
-    if (busy) return;
+    if (busy || uploading) return;
+    if (failed) { note(failed.error!); return; }
     setBusy(true);
-    try { await api.send(tmux, text, true); setText(''); note(text ? 'Sent' : 'Enter'); }
-    catch (e) { note((e as Error).message); }
+    const files = atts.map((a) => a.path!);
+    try {
+      await api.send(tmux, text, true, files);
+      setText('');
+      for (const a of atts) URL.revokeObjectURL(a.url);
+      setAtts([]);
+      note(text || files.length ? 'Sent' : 'Enter');
+    } catch (e) { note((e as Error).message); }
     finally { setBusy(false); }
   };
   const press = async (k: typeof KEYS[number]) => {
@@ -647,10 +685,26 @@ function Dock({ tmux, keysOnly }: { tmux: string; keysOnly?: boolean }) {
       <div className="m-keys" onPointerDown={(e) => { if ((e.target as HTMLElement).closest('button')) e.preventDefault(); }}>
         {KEYS.map((k) => <button key={k.label} type="button" title={k.title} onClick={() => press(k)}>{k.label}</button>)}
       </div>
+      {!keysOnly && atts.length > 0 && (
+        <div className="m-atts">
+          {atts.map((a) => (
+            <div key={a.id} className={`m-att ${a.path ? '' : a.error ? 'failed' : 'loading'}`} title={a.error}>
+              {a.noPreview
+                ? <span className="m-att-none">Photo</span>
+                : <img src={a.url} alt="" onError={() => setAtts((cur) => cur.map((x) => (x.id === a.id ? { ...x, noPreview: true } : x)))} />}
+              <button type="button" onClick={() => detach(a.id)} aria-label="Remove picture">×</button>
+            </div>
+          ))}
+        </div>
+      )}
       {!keysOnly && <form className="m-compose" onSubmit={(e) => { e.preventDefault(); send(); }}>
+        <button type="button" className="m-attach" onClick={() => picker.current?.click()} aria-label="Attach pictures">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"><rect x="2.5" y="4" width="15" height="12" rx="2.5" /><circle cx="7.5" cy="8.5" r="1.5" /><path d="m3 14.5 4.5-4 3.5 3 2.5-2 3.5 3" strokeLinecap="round" /></svg>
+        </button>
+        <input ref={picker} type="file" accept="image/*" multiple hidden onChange={(e) => { attach(e.target.files); e.target.value = ''; }} />
         <textarea ref={ta} rows={1} value={text} placeholder="Message" onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } }} />
-        <button type="submit" className="btn primary m-send" disabled={busy}>{text.trim() ? 'Send' : '⏎'}</button>
+        <button type="submit" className="btn primary m-send" disabled={busy || uploading}>{text.trim() || atts.length ? 'Send' : '⏎'}</button>
       </form>}
       {flash && <div className="m-flash">{flash}</div>}
     </div>
