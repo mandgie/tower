@@ -65,8 +65,13 @@ function useVisualViewportHeight() {
     const vv = window.visualViewport;
     if (!vv) return;
     const root = document.documentElement;
+    // A Home Screen app shrinks innerHeight with the keyboard too, so compare against the tallest height seen
+    // at this width instead (reset on rotation). Pinch zoom shrinks vv.height as well; scale undoes that.
+    let full = 0, width = 0;
     const on = () => {
-      const kb = vv.height < window.innerHeight - 80;
+      if (vv.width * vv.scale !== width) { width = vv.width * vv.scale; full = 0; }
+      full = Math.max(full, window.innerHeight, vv.height * vv.scale);
+      const kb = vv.height * vv.scale < full - 80;
       root.classList.toggle('kb-open', kb);
       if (kb) root.style.setProperty('--vvh', `${vv.height}px`);
       else root.style.removeProperty('--vvh');
