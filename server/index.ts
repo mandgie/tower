@@ -13,6 +13,7 @@ import { loadSettings, saveSettings } from './settings.js';
 import { saveUpload, isUpload, uploadFile } from './uploads.js';
 import { loadWorkspaces, saveWorkspaces, workspaceOps, addWorkspaceOp, clearWorkspaceOp } from './workspaces.js';
 import { runDoctor, doctorSummary } from './doctor.js';
+import { todoState, todoTick, scanWorkspace, setTodoStatus, startTodo, onTodosChange } from './todos.js';
 import { applyRemote, remoteInfo, rotateToken, isPaired, isLoopback, peerAllowed, originMatchesHost, handlePair, unpairedPage } from './remote.js';
 import type { Snapshot, SnapshotDelta } from '../shared/types.js';
 
@@ -37,7 +38,7 @@ const remoteSockets = new Set<WebSocket>();
 let refreshing = false;
 let refreshQueued = false;
 
-const DELTA_FIELDS = ['extraDirs', 'pending', 'renamed', 'workspaces', 'placements', 'workspaceOps'] as const;
+const DELTA_FIELDS = ['extraDirs', 'pending', 'renamed', 'workspaces', 'placements', 'workspaceOps', 'todos', 'todoScans'] as const;
 
 async function refresh(): Promise<Snapshot> {
   if (refreshing) { refreshQueued = true; return snapshot; }
@@ -46,6 +47,8 @@ async function refresh(): Promise<Snapshot> {
     const next = await buildSnapshot();
     next.workspaces = loadWorkspaces();
     next.workspaceOps = workspaceOps();
+    Object.assign(next, todoState());
+    todoTick(next.workspaces, next.sessions);
     const delta: SnapshotDelta = { generatedAt: next.generatedAt, upsert: [], remove: [] };
     const sessions = new Map<string, string>();
     for (const s of next.sessions) {
@@ -132,6 +135,27 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       clearWorkspaceOp(decodeURIComponent(doneOp[1]));
       refresh();
       return json(res, 200, { ok: true });
+    }
+    if (m === 'POST' && p === '/api/todos/scan') {
+      // Scan now: read the workspace's quiet sessions without waiting for the next round.
+      const b = await readBody(req);
+      const w = loadWorkspaces().find((x) => x.id === b.workspace);
+      if (!w) return json(res, 404, { error: 'Unknown workspace' });
+      scanWorkspace(w, snapshot.sessions, true);
+      return json(res, 200, { ok: true });
+    }
+    const startT = p.match(/^\/api\/todos\/([^/]+)\/start$/);
+    if (m === 'POST' && startT) {
+      const b = await readBody(req);
+      const r = await startTodo(decodeURIComponent(startT[1]), snapshot.sessions, b.skipPermissions);
+      setTimeout(refresh, 300);
+      return json(res, 200, r);
+    }
+    const todo = p.match(/^\/api\/todos\/([^/]+)$/);
+    if (m === 'POST' && todo) {
+      const b = await readBody(req);
+      if (!['proposed', 'accepted', 'done', 'rejected'].includes(b.status)) return json(res, 400, { error: 'Bad status' });
+      try { return json(res, 200, setTodoStatus(decodeURIComponent(todo[1]), b.status)); } catch (e) { return json(res, 404, { error: (e as Error).message }); }
     }
     const placed = p.match(/^\/api\/placements\/([^/]+)$/);
     if (m === 'DELETE' && placed) {
@@ -299,6 +323,7 @@ const server = createServer(false);
 async function main() {
   runDoctor().then((r) => console.log(`[doctor] ${doctorSummary(r)}`));
   await ensureServer().catch((e) => console.error('[tmux] ensure failed', e));
+  onTodosChange(() => setTimeout(refresh, 50));
   await refresh();
   setInterval(refresh, 2000);
   try {

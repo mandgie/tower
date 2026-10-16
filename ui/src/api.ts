@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { applyDelta } from '../../shared/snapshot';
-import type { Snapshot, SnapshotEvent, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary, WorkspaceOp, WorkspaceOpRequest } from '../../shared/types';
+import type { Snapshot, SnapshotEvent, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary, WorkspaceOp, WorkspaceOpRequest, Todo, TodoStatus } from '../../shared/types';
 
 /** Where the Mac should put a session the phone starts (see `Placement`); absent on the desktop, which opens its own panes. */
 export interface Place { workspace?: string }
@@ -41,6 +41,9 @@ export const api = {
   saveWorkspaces: (w: WorkspaceSummary[]) => j<{ ok: true }>('/api/workspaces', { method: 'PUT', body: JSON.stringify(w) }),
   remote: () => j<RemoteInfo>('/api/remote'),
   rotateRemote: () => j<RemoteInfo>('/api/remote/rotate', { method: 'POST' }),
+  setTodo: (id: string, status: TodoStatus) => j<Todo>(`/api/todos/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ status }) }),
+  startTodo: (id: string, skipPermissions?: boolean) => j<{ tmux: string; key?: string }>(`/api/todos/${encodeURIComponent(id)}/start`, { method: 'POST', body: JSON.stringify({ skipPermissions }) }),
+  scanTodos: (workspace: string) => j<{ ok: true }>('/api/todos/scan', { method: 'POST', body: JSON.stringify({ workspace }) }),
 };
 
 export function wsUrl(path: string): string {

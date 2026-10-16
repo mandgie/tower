@@ -7,7 +7,8 @@ import { LoopBadge } from './LoopBadge';
 
 export interface Pane { tmux: string; agent: Agent; openedAt?: number }
 /** `auto` marks a generated name that gets replaced by the first session's project. Renaming clears it. */
-export interface Workspace { id: string; name: string; panes: Pane[]; maximized?: string | null; auto?: boolean }
+/** `todos`: the todo finder reads this workspace's Claude sessions (server/todos.ts). */
+export interface Workspace { id: string; name: string; panes: Pane[]; maximized?: string | null; auto?: boolean; todos?: boolean }
 export const isAutoName = (w: Workspace) => w.auto === true || /^Workspace \d+$/.test(w.name) || /^[0-9a-f]{8}$/.test(w.name);
 
 export function gridColumns(n: number): number {
@@ -23,11 +24,14 @@ export function summarizeStatus(statuses: Status[]): Status | null {
   return statuses.reduce((a, b) => (RANK[a] <= RANK[b] ? a : b));
 }
 
-export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing, onActivate, onCreate, onRename, onClose }: {
+export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing, onActivate, onCreate, onRename, onClose, todoCounts, todosOpen, onTodos }: {
   workspaces: Workspace[]; activeId: string; byTmux: Map<string, Session>;
   editing: string | null; setEditing: (id: string | null) => void;
   onActivate: (id: string) => void; onCreate: () => void; onRename: (id: string, name: string) => void; onClose: (id: string) => void;
+  todoCounts: Map<string, { proposed: number; open: number }>; todosOpen: boolean; onTodos: () => void;
 }) {
+  const activeTodos = todoCounts.get(activeId);
+  const activeWs = workspaces.find((w) => w.id === activeId);
   const [draft, setDraft] = useState('');
   useEffect(() => { if (editing) setDraft(workspaces.find((w) => w.id === editing)?.name ?? ''); }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
@@ -52,6 +56,7 @@ export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing
                 <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 1.5l2 2L4 10H2V8z" /></svg>
               </span>
             )}
+            {w.todos && (todoCounts.get(w.id)?.proposed ?? 0) > 0 && <span className="ws-todo-dot" title="New todo proposals" />}
             <span className="ws-count">{w.panes.length || ''}</span>
             <span className="ws-index">{i < 9 ? i + 1 : ''}</span>
             <span className="ws-close" title="Close workspace (sessions keep running)" onClick={(e) => { e.stopPropagation(); onClose(w.id); }}>×</span>
@@ -59,6 +64,12 @@ export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing
         );
       })}
       <button className="ws-add" onClick={onCreate} title="New workspace">+</button>
+      <button className={`ws-todos ${todosOpen ? 'open' : ''} ${activeWs?.todos ? 'on' : ''}`} onClick={onTodos} title="Todos for this workspace  ⌘⇧T">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3.5l1.2 1.2L5.5 2.4M2 9.5l1.2 1.2 2.3-2.3M7.5 4h4.5M7.5 10h4.5" /></svg>
+        Todos
+        {activeWs?.todos && (activeTodos?.proposed ?? 0) > 0 && <span className="ws-todos-new">{activeTodos!.proposed}</span>}
+        {activeWs?.todos && !(activeTodos?.proposed) && (activeTodos?.open ?? 0) > 0 && <span className="ws-todos-open">{activeTodos!.open}</span>}
+      </button>
     </div>
   );
 }

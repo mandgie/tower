@@ -77,6 +77,8 @@ export interface Snapshot {
   workspaces?: WorkspaceSummary[];  // the Mac's workspaces, mirrored for the phone
   placements?: Placement[];         // sessions the phone started, waiting for the Mac to put them in a workspace
   workspaceOps?: WorkspaceOp[];     // workspace changes made on the phone, waiting for the Mac to apply them
+  todos?: Todo[];                   // todos found in the sessions of workspaces that have the todo finder on
+  todoScans?: TodoScan[];           // the todo finder's state per workspace
 }
 
 export interface ProjectDir { cwd: string; name: string }
@@ -95,6 +97,8 @@ export interface SnapshotDelta {
   workspaces?: WorkspaceSummary[];
   placements?: Placement[];
   workspaceOps?: WorkspaceOp[];
+  todos?: Todo[];
+  todoScans?: TodoScan[];
 }
 
 export type SnapshotEvent = { t: 'full'; snapshot: Snapshot } | ({ t: 'delta' } & SnapshotDelta);
@@ -103,6 +107,36 @@ export interface WorkspaceSummary {
   id: string;
   name: string;
   panes: string[];     // tmux names, in grid order
+  todos?: boolean;     // the todo finder reads this workspace's Claude sessions (server/todos.ts)
+}
+
+/**
+ * A todo the finder read out of a session's turns. `proposed` waits for the user; `accepted` is on the
+ * list; `done` and `rejected` stay on disk so the finder does not propose the same thing again.
+ */
+export type TodoStatus = 'proposed' | 'accepted' | 'done' | 'rejected';
+
+export interface Todo {
+  id: string;
+  workspace: string;   // workspace id
+  session: string;     // session key the todo came from
+  sessionTitle: string;
+  cwd: string;
+  title: string;       // one imperative line
+  detail: string;      // why it is open, in a sentence or two
+  quote: string;       // the words in the transcript that show it is open
+  createdAt: number;
+  status: TodoStatus;
+  decidedAt?: number;
+  startedIn?: { key: string; tmux: string; at: number };  // the session started to do this todo
+}
+
+/** The finder's state for one workspace. */
+export interface TodoScan {
+  workspace: string;
+  running: boolean;
+  lastAt?: number;     // when the last scan finished
+  error?: string;      // why the last scan failed
 }
 
 /**
@@ -158,6 +192,7 @@ export interface Settings {
   remotePort: number;
   remoteAllowLan: boolean;       // also accept private LAN addresses, not only Tailscale
   trustFolders: boolean;         // mark a folder trusted for Claude before launching there, so it never asks
+  todoModel: string;             // model the todo finder runs (`claude -p --model`)
 }
 
 export interface RemoteUrl {

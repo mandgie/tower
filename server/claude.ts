@@ -52,7 +52,7 @@ function readRange(fd: number, start: number, len: number): string {
   return buf.subarray(0, n).toString('utf8');
 }
 
-function userText(content: unknown): string | null {
+export function userText(content: unknown): string | null {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     const texts = content.filter((b: any) => b && b.type === 'text').map((b: any) => b.text as string);
@@ -62,7 +62,7 @@ function userText(content: unknown): string | null {
 }
 
 /** Real prompts only: skip slash-command expansions, tool results, meta injections. */
-function isRealPrompt(rec: any): boolean {
+export function isRealPrompt(rec: any): boolean {
   if (rec.type !== 'user' || rec.isMeta || rec.isSidechain) return false;
   const t = userText(rec.message?.content);
   if (!t) return false;

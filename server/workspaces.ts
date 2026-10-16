@@ -5,8 +5,8 @@ import { APP_DIR } from './config.js';
 import type { WorkspaceSummary, WorkspaceOp, WorkspaceOpRequest } from '../shared/types.js';
 
 /**
- * A read-only mirror of the Mac's workspaces for the phone. The desktop UI owns them (localStorage) and
- * pushes every change here; nothing on the server reads them except to pass them on in the snapshot.
+ * A read-only mirror of the Mac's workspaces. The desktop UI owns them (localStorage) and pushes every
+ * change here. The phone reads them from the snapshot, and the todo finder reads which workspaces have it on.
  */
 const FILE = path.join(APP_DIR, 'workspaces.json');
 
@@ -28,7 +28,7 @@ function clean(raw: unknown): WorkspaceSummary[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((w) => w && typeof w.id === 'string' && typeof w.name === 'string' && Array.isArray(w.panes))
-    .map((w) => ({ id: w.id, name: w.name, panes: w.panes.filter((p: unknown) => typeof p === 'string') }));
+    .map((w) => ({ id: w.id, name: w.name, panes: w.panes.filter((p: unknown) => typeof p === 'string'), ...(w.todos === true ? { todos: true } : {}) }));
 }
 
 /**

@@ -5,7 +5,8 @@ import fs from 'node:fs';
 export const HOME = os.homedir();
 export const CLAUDE_DIR = path.join(HOME, '.claude');
 export const CODEX_DIR = path.join(HOME, '.codex');
-export const APP_DIR = path.join(HOME, '.multisession');
+/** Tower's own state. MS_APP_DIR moves it, so a test server does not share files with the installed app. */
+export const APP_DIR = process.env.MS_APP_DIR || path.join(HOME, '.multisession');
 export const TMUX_SOCKET = 'multisession';
 /** Port to listen on. 0 (MS_PORT unset) lets the OS pick a free one; the chosen port is reported to Electron. */
 export const PORT = Number(process.env.MS_PORT || 0);

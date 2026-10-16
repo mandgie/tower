@@ -14,6 +14,7 @@ const DEFAULTS: Settings = {
   remotePort: 4311,
   remoteAllowLan: false,
   trustFolders: true,
+  todoModel: 'claude-opus-5-5',
 };
 
 export function loadSettings(): Settings {

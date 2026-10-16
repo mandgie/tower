@@ -10,6 +10,7 @@ import { NewSession } from './components/NewSession';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Doctor } from './components/Doctor';
 import { WorkspaceBar, isAutoName, PaneGrid, gridColumns, type Workspace, type Pane } from './components/Workspace';
+import { TodoPanel } from './components/TodoPanel';
 
 declare global {
   interface Window { multisession?: { onCommand: (cb: (cmd: string) => void) => () => void; openExternal?: (url: string) => Promise<boolean>; pathForFile?: (file: File) => string } }
@@ -19,6 +20,7 @@ const WS_KEY = 'ms.workspaces';
 const OLD_TABS_KEY = 'ms.tabs';
 const VIEW_KEY = 'ms.view';
 const SIDEBAR_KEY = 'ms.sidebar';
+const TODOS_KEY = 'ms.todosOpen';
 
 const newId = () => Math.random().toString(36).slice(2, 10);
 
@@ -60,11 +62,13 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem(SIDEBAR_KEY) !== '0');
   const [renaming, setRenaming] = useState<string | null>(null);
   useEffect(() => { localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? '1' : '0'); }, [sidebarOpen]);
+  const [todosOpen, setTodosOpen] = useState(() => localStorage.getItem(TODOS_KEY) === '1');
+  useEffect(() => { localStorage.setItem(TODOS_KEY, todosOpen ? '1' : '0'); }, [todosOpen]);
 
   useEffect(() => { localStorage.setItem(WS_KEY, JSON.stringify({ workspaces, activeId })); }, [workspaces, activeId]);
   useEffect(() => { localStorage.setItem(VIEW_KEY, view); }, [view]);
-  // Mirror the workspaces to the server so the phone can filter by them. Only names and pane order matter.
-  const wsMirror = JSON.stringify(workspaces.map((w) => ({ id: w.id, name: w.name, panes: w.panes.map((p) => p.tmux) })));
+  // Mirror the workspaces to the server: the phone filters by them, and the todo finder reads the ones that have it on.
+  const wsMirror = JSON.stringify(workspaces.map((w) => ({ id: w.id, name: w.name, panes: w.panes.map((p) => p.tmux), ...(w.todos ? { todos: true } : {}) })));
   useEffect(() => {
     const t = setTimeout(() => { api.saveWorkspaces(JSON.parse(wsMirror)).catch(() => {}); }, 400);
     return () => clearTimeout(t);
@@ -84,6 +88,19 @@ export function App() {
   }, [sessions]);
 
   const active = workspaces.find((w) => w.id === activeId) ?? workspaces[0];
+  const todos = snapshot?.todos ?? [];
+  const todoCounts = useMemo(() => {
+    const m = new Map<string, { proposed: number; open: number }>();
+    for (const t of todos) {
+      const c = m.get(t.workspace) ?? { proposed: 0, open: 0 };
+      if (t.status === 'proposed') c.proposed++; else if (t.status === 'accepted') c.open++;
+      m.set(t.workspace, c);
+    }
+    return m;
+  }, [todos]);
+  const setWorkspaceTodos = useCallback((id: string, on: boolean) => {
+    setWs((cur) => ({ ...cur, workspaces: cur.workspaces.map((w) => (w.id === id ? { ...w, todos: on } : w)) }));
+  }, []);
   const findPane = useCallback((tmux: string) => workspaces.find((w) => w.panes.some((p) => p.tmux === tmux)), [workspaces]);
 
   const updateWs = useCallback((fn: (ws: Workspace[], activeId: string) => { workspaces: Workspace[]; activeId?: string }) => {
@@ -322,6 +339,7 @@ export function App() {
       else if (cmd === 'new-workspace') createWorkspace();
       else if (cmd === 'rename-workspace') setRenaming(activeId);
       else if (cmd === 'settings') setSettingsOpen((v) => !v);
+      else if (cmd === 'todos') setTodosOpen((v) => !v);
       else if (cmd === 'doctor') setDoctorOpen(true);
       else if (cmd.startsWith('workspace:')) { const w = workspaces[Number(cmd.slice(10)) - 1]; if (w) activateWorkspace(w.id); }
       else if (cmd === 'next-workspace' || cmd === 'prev-workspace') {
@@ -347,6 +365,7 @@ export function App() {
       else if (e.key === 'd' && !e.shiftKey) { e.preventDefault(); run('duplicate'); }
       else if (e.key === 'k' || e.key === 'p') { e.preventDefault(); run('search'); }
       else if (e.key === ',') { e.preventDefault(); run('settings'); }
+      else if (e.key === 't' && e.shiftKey) { e.preventDefault(); run('todos'); }
       else if (e.key === 't') { e.preventDefault(); run('new-workspace'); }
       else if (e.key === 'r' && e.shiftKey) { e.preventDefault(); run('rename-workspace'); }
       else if (e.key === 'w') { e.preventDefault(); run('close-pane'); }
@@ -388,8 +407,10 @@ export function App() {
             <WorkspaceBar workspaces={workspaces} activeId={activeId} byTmux={byTmux}
               onActivate={activateWorkspace} onCreate={createWorkspace} onClose={closeWorkspace}
               editing={renaming} setEditing={setRenaming}
+              todoCounts={todoCounts} todosOpen={todosOpen} onTodos={() => setTodosOpen((v) => !v)}
               onRename={(id, name) => updateWs((ws) => ({ workspaces: ws.map((w) => (w.id === id ? { ...w, name, auto: false } : w)) }))} />
           )}
+          <div className="stage-row">
           <div className="stage">
             {workspaces.map((w) => (
               <PaneGrid key={w.id} workspace={w} byTmux={byTmux} focused={focused} visible={!transcriptMode && w.id === activeId}
@@ -411,6 +432,16 @@ export function App() {
                 </div>
               </div>
             )}
+          </div>
+          {todosOpen && active && (
+            <TodoPanel workspace={active} todos={todos.filter((t) => t.workspace === active.id)}
+              scan={snapshot?.todoScans?.find((s) => s.workspace === active.id)} byKey={byKey} byTmux={byTmux}
+              onToggle={(on) => setWorkspaceTodos(active.id, on)} onOpenSession={select} onClose={() => setTodosOpen(false)}
+              onStart={async (t) => {
+                const r = await api.startTodo(t.id, localStorage.getItem('ms.skipPerms') !== '0');
+                openTerminal(r.tmux, 'claude', r.key);
+              }} />
+          )}
           </div>
         </main>
       </div>

@@ -180,6 +180,7 @@ function buildMenu() {
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: 'View', submenu: [
       { label: 'Toggle Session List', accelerator: 'Cmd+B', click: send('toggle-sidebar') },
+      { label: 'Toggle Todos', accelerator: 'Cmd+Shift+T', click: send('todos') },
       { type: 'separator' },
       { role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
     { role: 'windowMenu' },
