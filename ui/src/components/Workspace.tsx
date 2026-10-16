@@ -74,10 +74,23 @@ export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing
   );
 }
 
-export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap, onMaximize, onRemove, onKill, onAdd }: {
+/** Marks a session that was started from a todo; a click shows that todo in the Todos panel. */
+export function TodoBadge({ todo, onClick }: { todo: NonNullable<Session['todo']>; onClick: () => void }) {
+  return (
+    <button className={`todo-badge ${todo.status}`} title={`Started from the todo: ${todo.title}\nClick to show it in Todos`}
+      onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onClick(); }}>
+      <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        {todo.status === 'done' ? <path d="M2.5 6.2l2.3 2.3 4.7-5" /> : <rect x="2" y="2" width="8" height="8" rx="2" />}
+      </svg>
+      Todo
+    </button>
+  );
+}
+
+export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap, onMaximize, onRemove, onKill, onAdd, onTodo }: {
   workspace: Workspace; byTmux: Map<string, Session>; focused: string | null; visible: boolean;
   onFocus: (tmux: string) => void; onSwap: (a: string, b: string) => void; onMaximize: (tmux: string | null) => void;
-  onRemove: (tmux: string) => void; onKill: (tmux: string) => void; onAdd: () => void;
+  onRemove: (tmux: string) => void; onKill: (tmux: string) => void; onAdd: () => void; onTodo: (id: string) => void;
 }) {
   const panes = workspace.panes;
   const max = workspace.maximized && panes.some((p) => p.tmux === workspace.maximized) ? workspace.maximized : null;
@@ -101,7 +114,7 @@ export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap,
           <PaneView key={p.tmux} pane={p} session={s} focused={focused === p.tmux && visible} hidden={hidden} maximized={max === p.tmux}
             dragging={dragging === p.tmux} over={over === p.tmux}
             onFocus={() => onFocus(p.tmux)} onMaximize={() => onMaximize(max === p.tmux ? null : p.tmux)}
-            onRemove={() => onRemove(p.tmux)} onKill={() => onKill(p.tmux)}
+            onRemove={() => onRemove(p.tmux)} onKill={() => onKill(p.tmux)} onTodo={onTodo}
             onDragStart={() => setDragging(p.tmux)} onDragEnd={() => { setDragging(null); setOver(null); }}
             onDragOver={(e) => { if (dragging && dragging !== p.tmux) { e.preventDefault(); setOver(p.tmux); } }}
             onDragLeave={() => setOver((o) => (o === p.tmux ? null : o))}
@@ -120,9 +133,9 @@ export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap,
   );
 }
 
-function PaneView({ pane, session: s, focused, hidden, maximized, dragging, over, onFocus, onMaximize, onRemove, onKill, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop }: {
+function PaneView({ pane, session: s, focused, hidden, maximized, dragging, over, onFocus, onMaximize, onRemove, onKill, onTodo, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop }: {
   pane: Pane; session?: Session; focused: boolean; hidden: boolean; maximized: boolean; dragging: boolean; over: boolean;
-  onFocus: () => void; onMaximize: () => void; onRemove: () => void; onKill: () => void;
+  onFocus: () => void; onMaximize: () => void; onRemove: () => void; onKill: () => void; onTodo: (id: string) => void;
   onDragStart: () => void; onDragEnd: () => void; onDragOver: (e: DragEvent) => void; onDragLeave: () => void; onDrop: (e: DragEvent) => void;
 }) {
   const [confirm, setConfirm] = useState(false);
@@ -137,6 +150,7 @@ function PaneView({ pane, session: s, focused, hidden, maximized, dragging, over
         title={s ? `${s.title}\n${s.cwd}\nDrag onto another pane to swap` : pane.tmux}>
         <span className="dot" />
         <span className="pane-project">{s?.project ?? pane.tmux.replace(/^ms-\w+-/, '')}</span>
+        {s?.todo && <TodoBadge todo={s.todo} onClick={() => onTodo(s.todo!.id)} />}
         <span className="pane-title">{s?.title ?? ''}</span>
         {s && <LoopBadge session={s} />}
         {s && <ContextBadge session={s} />}

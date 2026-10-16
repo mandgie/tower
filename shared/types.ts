@@ -40,6 +40,7 @@ export interface Session {
   agentName?: string;  // claude's own session name (e.g. fpl-72)
   context?: SessionContext;  // context window fill after the last turn, from the transcript tail
   loop?: SessionLoop;        // a /loop (or other scheduled prompt) armed in this live Claude process
+  todo?: { id: string; title: string; status: TodoStatus };  // the todo this session was started for (server/todos.ts)
 }
 
 /** What Claude's own scheduler will run next, read from ScheduleWakeup / CronCreate calls in the transcript. */
@@ -131,7 +132,18 @@ export interface Todo {
   createdAt: number;
   status: TodoStatus;
   decidedAt?: number;
-  startedIn?: { key: string; tmux: string; at: number };  // the session started to do this todo
+  startedIn?: {  // the session started to do this todo
+    key: string; tmux: string; at: number;
+    worktree?: { path: string; branch: string; base: string };  // its own git worktree (server/todos.ts)
+  };
+  /** The started session ended a turn with the finish line (server/todos.ts): Tower proposes `done`. */
+  finished?: { at: number; uuid: string; text: string; dismissed?: boolean };
+  /**
+   * Tower found that the todo is done or no longer needed (server/todos.ts): a later scan read it in a
+   * session (`session`), or git shows the named files committed (`git`). A proposal moves to `done` by
+   * itself, with `from` kept for Undo; an accepted todo shows the finding and waits for the user.
+   */
+  closed?: { at: number; by: 'session' | 'git'; reason: string; quote?: string; from: TodoStatus; dismissed?: boolean };
 }
 
 /** The finder's state for one workspace. */

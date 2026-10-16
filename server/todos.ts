@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { APP_DIR } from './config.js';
 import { shellEnv } from './shell.js';
 import { loadSettings } from './settings.js';
@@ -56,37 +57,169 @@ export function todoState(): { todos: Todo[]; todoScans: TodoScan[] } {
   return { todos: store.todos, todoScans: [...scans.values()] };
 }
 
+/** "Not yet" on a finish report: keep the todo open until the session reports again. */
+export function dismissFinish(id: string): Todo {
+  const t = store.todos.find((x) => x.id === id);
+  if (!t) throw new Error('Unknown todo');
+  if (t.finished) t.finished.dismissed = true;
+  if (t.closed) t.closed.dismissed = true;
+  save();
+  onChange();
+  return t;
+}
+
 export function setTodoStatus(id: string, status: TodoStatus): Todo {
   const t = store.todos.find((x) => x.id === id);
   if (!t) throw new Error('Unknown todo');
   t.status = status;
   t.decidedAt = Date.now();
+  // Undo of a todo that Tower closed: the user says it is still open, so do not close it again for the same reason.
+  if (t.closed && status !== 'done') t.closed.dismissed = true;
   save();
   onChange();
   return t;
 }
 
 /**
- * Start a Claude session in the todo's folder with the todo as its first prompt, and link the two.
- * Starting a proposal also accepts it.
+ * Tower found that the todo is done. A proposal nobody looked at moves to `done` by itself (Undo brings it
+ * back); an accepted todo is the user's, so it only shows the finding with Mark done and Not yet.
+ */
+function closeTodo(t: Todo, by: 'session' | 'git', reason: string, quote?: string): void {
+  if (t.status !== 'proposed' && t.status !== 'accepted') return;
+  if (t.closed && !t.closed.dismissed) return;
+  t.closed = { at: Date.now(), by, reason: clip(reason.trim(), 300), quote: quote ? clip(quote.trim(), 300) : undefined, from: t.status };
+  if (t.status === 'proposed') { t.status = 'done'; t.decidedAt = Date.now(); }
+}
+
+const execFileP = promisify(execFile);
+/** Where startTodo puts the git worktrees of started sessions: outside the repo, so it never sees them. */
+const WORKTREES = path.join(APP_DIR, 'worktrees');
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileP('git', ['-C', cwd, ...args], { env: shellEnv(), timeout: 60_000, encoding: 'utf8' });
+  return stdout.trim();
+}
+
+/**
+ * A git worktree of the todo's repository on a new branch from the current HEAD, so sessions started from
+ * todos never commit into the same checkout at the same time. Returns the folder to start in (the todo's
+ * folder at the same place inside the worktree), or null when the folder is not in a git repository.
+ * Starting the same todo again reuses its worktree, with the work done so far.
+ */
+async function todoWorktree(t: Todo): Promise<{ cwd: string; path: string; branch: string; base: string } | null> {
+  let top: string, prefix: string;
+  try {
+    top = await git(t.cwd, ['rev-parse', '--show-toplevel']);
+    prefix = await git(t.cwd, ['rev-parse', '--show-prefix']);
+  } catch { return null; }
+  // The todo's folder may be untracked, and then it is not in the worktree.
+  const inside = (dir: string) => (fs.existsSync(path.join(dir, prefix)) ? path.resolve(dir, prefix) : dir);
+  const old = t.startedIn?.worktree;
+  if (old && fs.existsSync(old.path)) return { cwd: inside(old.path), ...old };
+  const short = t.id.slice(0, 8);
+  const slug = t.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+  const branch = `todo/${slug || 'task'}-${short}`;
+  const dir = path.join(WORKTREES, `${path.basename(top)}-${short}`);
+  const base = (await git(top, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')) || (await git(top, ['rev-parse', '--short', 'HEAD']));
+  fs.mkdirSync(WORKTREES, { recursive: true });
+  await git(top, ['worktree', 'add', '-b', branch, dir, 'HEAD']);
+  return { cwd: inside(dir), path: dir, branch, base };
+}
+
+/**
+ * Start a Claude session for the todo with the todo as its first prompt, and link the two. In a git
+ * repository the session gets its own worktree (see todoWorktree). Starting a proposal also accepts it.
  */
 export async function startTodo(id: string, sessions: Session[], skipPermissions?: boolean): Promise<{ tmux: string; key?: string }> {
   const t = store.todos.find((x) => x.id === id);
   if (!t) throw new Error('Unknown todo');
   const from = sessions.find((s) => s.key === t.session);
+  const wt = await todoWorktree(t);
   const prompt = [
     t.title,
     t.detail,
     `This task comes from Tower's todo list. Tower found it in an earlier Claude session in this folder ("${t.sessionTitle}").`,
     `The earlier session said: "${t.quote}"`,
     from?.transcriptPath ? `The earlier session's transcript is ${from.transcriptPath}. Read it only if you need more context.` : '',
+    wt ? `You work in your own git worktree at ${wt.path}, on the branch ${wt.branch}, which Tower made from ${wt.base} so that parallel sessions cannot collide. Commit your work on this branch. Do not merge it into ${wt.base} and do not change the main checkout in ${t.cwd}. Uncommitted changes in the main checkout are not in this worktree. If the project needs installed dependencies (for example node_modules), install them in the worktree first. In your final message, give the branch name so the user can merge it.` : '',
+    `When the task is completely done, end your final message with a line that says only ${FINISH_LINE}. Tower then proposes to mark the todo done. Do not write that line while work is left or while you wait for an answer.`,
   ].filter(Boolean).join('\n\n');
-  const r = await launchNew({ agent: 'claude', cwd: t.cwd, prompt, skipPermissions });
-  t.startedIn = { key: r.key ?? '', tmux: r.tmux, at: Date.now() };
+  const r = await launchNew({ agent: 'claude', cwd: wt?.cwd ?? t.cwd, prompt, skipPermissions });
+  t.startedIn = { key: r.key ?? '', tmux: r.tmux, at: Date.now(), worktree: wt ? { path: wt.path, branch: wt.branch, base: wt.base } : undefined };
   if (t.status === 'proposed' || t.status === 'rejected') { t.status = 'accepted'; t.decidedAt = Date.now(); }
   save();
   onChange();
   return r;
+}
+
+/**
+ * Mark each session that a todo started. The key is known at launch; after /clear the session gets a new
+ * key, but its pane keeps following the tmux renames, so match the pane name too.
+ */
+export function linkTodoSessions(sessions: Session[], renamed: Record<string, string>): void {
+  const byKey = new Map<string, Todo>();
+  const byTmux = new Map<string, Todo>();
+  for (const t of store.todos) {
+    if (!t.startedIn) continue;
+    if (t.startedIn.key) byKey.set(t.startedIn.key, t);
+    byTmux.set(renamed[t.startedIn.tmux] ?? t.startedIn.tmux, t);
+  }
+  if (!byKey.size && !byTmux.size) return;
+  for (const s of sessions) {
+    const t = byKey.get(s.key) ?? (s.live?.kind === 'tmux' ? byTmux.get(s.live.tmux) : undefined);
+    if (t) s.todo = { id: t.id, title: t.title, status: t.status };
+  }
+}
+
+/** The line a started session ends its last message with when the todo is done (see startTodo). */
+const FINISH_LINE = '[todo done]';
+const FINISH_TAIL_BYTES = 256 * 1024;
+/** Transcript size at the last finish check, so an unchanged transcript is not read again. */
+const finishChecked = new Map<string, number>();
+
+/**
+ * Propose `done` for an open todo when the session started for it ends a turn with FINISH_LINE.
+ * The report is kept by the uuid of that message: "Not yet" holds until a later message reports again.
+ */
+export function checkTodoFinish(sessions: Session[], renamed: Record<string, string>): void {
+  let changed = false;
+  for (const t of store.todos) {
+    if (t.status !== 'accepted' || !t.startedIn) continue;
+    const tmux = renamed[t.startedIn.tmux] ?? t.startedIn.tmux;
+    const s = sessions.find((x) => x.key === t.startedIn!.key)
+      ?? sessions.find((x) => x.live?.kind === 'tmux' && x.live.tmux === tmux);
+    if (!s?.transcriptPath || s.status === 'working') continue;
+    let size: number;
+    try { size = fs.statSync(s.transcriptPath).size; } catch { continue; }
+    if (finishChecked.get(s.transcriptPath) === size) continue;
+    finishChecked.set(s.transcriptPath, size);
+    const last = lastReply(s.transcriptPath, size);
+    if (!last || last.uuid === t.finished?.uuid) continue;
+    const lines = last.text.trimEnd().split('\n');
+    if (lines.pop()!.replace(/[\s`*_>.]+/g, '').toLowerCase() !== FINISH_LINE.replace(/\s/g, '')) continue;
+    t.finished = { at: Date.now(), uuid: last.uuid, text: clip(lines.join('\n').trim(), 600) };
+    changed = true;
+  }
+  if (changed) { save(); onChange(); }
+}
+
+/** The text of the main thread's last assistant message that has text. */
+function lastReply(file: string, size: number): { uuid: string; text: string } | null {
+  const start = Math.max(0, size - FINISH_TAIL_BYTES);
+  const buf = Buffer.alloc(size - start);
+  const fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, buf, 0, buf.length, start); } finally { fs.closeSync(fd); }
+  const lines = buf.toString('utf8').split('\n');
+  if (start > 0) lines.shift();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i]) continue;
+    let r: any;
+    try { r = JSON.parse(lines[i]); } catch { continue; }
+    if (r.isSidechain || r.type !== 'assistant' || !Array.isArray(r.message?.content)) continue;
+    const text = r.message.content.filter((b: any) => b.type === 'text' && b.text?.trim()).map((b: any) => b.text).join('\n');
+    if (text) return { uuid: String(r.uuid ?? i), text };
+  }
+  return null;
 }
 
 /** Called on every snapshot tick; starts a scan of each enabled workspace at most every SCAN_EVERY_MS. */
@@ -94,6 +227,62 @@ export function todoTick(workspaces: WorkspaceSummary[], sessions: Session[], no
   if (now - lastTick < SCAN_EVERY_MS) return;
   lastTick = now;
   for (const w of workspaces) if (w.todos) scanWorkspace(w, sessions, false);
+  const on = new Set(workspaces.filter((w) => w.todos).map((w) => w.id));
+  queue = queue.then(() => checkCommits(store.todos.filter((t) => on.has(t.workspace)))).catch(() => {});
+}
+
+/**
+ * Close the open "Commit …" todos whose named files git shows committed after the todo was made, with no
+ * changes left. Exact and free (no model): a todo names its files, e.g. "Commit the link fixes in
+ * server/tmux.ts, Mobile.tsx and Transcript.tsx". A todo that names no file is left to the session check.
+ */
+async function checkCommits(todos: Todo[]): Promise<void> {
+  const open = todos.filter((t) => (t.status === 'proposed' || t.status === 'accepted') && !t.closed && /^commit\b/i.test(t.title));
+  if (!open.length) return;
+  const byCwd = new Map<string, Todo[]>();
+  for (const t of open) byCwd.set(t.cwd, [...(byCwd.get(t.cwd) ?? []), t]);
+  let changed = false;
+  for (const [cwd, list] of byCwd) {
+    let top: string, dirty: string[], log: { sha: string; subject: string; at: number; files: string[] }[];
+    try {
+      top = await git(cwd, ['rev-parse', '--show-toplevel']);
+      // Changed (staged or not) and new files, as paths from the top of the repository.
+      dirty = [
+        ...(await git(top, ['diff', '--name-only', 'HEAD'])).split('\n'),
+        ...(await git(top, ['ls-files', '--others', '--exclude-standard'])).split('\n'),
+      ].filter(Boolean);
+      const since = new Date(Math.min(...list.map((t) => t.createdAt)) - 60_000).toISOString();
+      log = (await git(top, ['log', `--since=${since}`, '--name-only', '--format=%x00%h%x09%ct%x09%s']))
+        .split('\0').filter((c) => c.trim()).map((c) => {
+          const [head, ...files] = c.split('\n');
+          const [sha, ct, subject] = head.split('\t');
+          return { sha, subject, at: Number(ct) * 1000, files: files.filter(Boolean) };
+        });
+    } catch { continue; }
+    if (!log.length) continue;
+    for (const t of list) {
+      const names = fileNames(`${t.title} ${t.detail}`);
+      if (!names.length) continue;
+      const hits = (files: string[], n: string) => files.some((f) => f === n || f.endsWith(`/${n}`));
+      if (names.some((n) => hits(dirty, n))) continue;
+      const commits = log.filter((c) => c.at >= t.createdAt - 60_000 && names.some((n) => hits(c.files, n)));
+      if (!commits.length || !names.every((n) => commits.some((c) => hits(c.files, n)))) continue;
+      closeTodo(t, 'git', `Committed in ${commits.map((c) => `${c.sha} “${c.subject}”`).join(', ')}.`);
+      changed = true;
+    }
+  }
+  if (changed) { save(); onChange(); }
+}
+
+/** File names a todo mentions: words with a path or a file extension, like server/tmux.ts or Mobile.tsx. */
+function fileNames(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/[\w./-]*\w\.[a-z][a-z0-9]{0,5}\b/gi)) {
+    const n = m[0].replace(/^\.\//, '');
+    if (/^\d/.test(n) || /\.(app|com|se|io|org|net)$/i.test(n) || /^(e\.g|i\.e)$/i.test(n)) continue;
+    out.add(n);
+  }
+  return [...out];
 }
 
 /** Queue a scan of one workspace. `force` (the Scan now button) skips the quiet wait. */
@@ -127,10 +316,21 @@ async function scanSession(workspace: string, s: Session): Promise<void> {
   if (!read) return;
   const text = render(read.records);
   if (text.trim()) {
-    const open = store.todos.filter((t) => t.workspace === workspace || t.cwd === s.cwd).slice(-80);
-    const found = await ask(s, text, open);
+    const near = store.todos.filter((t) => t.workspace === workspace || t.cwd === s.cwd);
+    const open = near.filter((t) => t.status === 'proposed' || t.status === 'accepted').slice(-40);
+    const past = near.filter((t) => t.status === 'done' || t.status === 'rejected').slice(-60);
+    const commits = await recentCommits(s.cwd, open);
+    const found = await ask(s, text, open, past, commits);
     const haystack = normalize(text);
-    for (const f of found.slice(0, MAX_TODOS_PER_SESSION)) {
+    const commitHay = normalize(commits);
+    // A quote proves the closing too: from the conversation, or a commit subject.
+    for (const c of found.closed) {
+      const t = open[c.n - 1];
+      const q = normalize(c.quote).slice(0, 60);
+      if (!t || !c.reason.trim() || !q || !(haystack.includes(q) || commitHay.includes(q))) continue;
+      closeTodo(t, 'session', c.reason, c.quote);
+    }
+    for (const f of found.todos.slice(0, MAX_TODOS_PER_SESSION)) {
       // The quote is the proof; a todo whose quote is not in the turns is the model's invention.
       if (!f.title.trim() || !haystack.includes(normalize(f.quote).slice(0, 60))) continue;
       store.todos.push({
@@ -208,7 +408,7 @@ A todo is a concrete piece of work that someone still needs to do. Report a todo
 Do not report:
 - Work that a later part of the conversation finishes.
 - Vague ideas, general advice, or questions without a concrete action.
-- Anything that matches a todo in the list of existing todos, even with other words.
+- Anything that matches an open todo or an earlier todo in the lists, even with other words.
 - Anything only about this conversation's own chat (for example "answer the user").
 
 Write each todo for the developer, who will read it days later without the conversation:
@@ -216,7 +416,16 @@ Write each todo for the developer, who will read it days later without the conve
 - detail: one or two sentences: why it is open and what "done" means.
 - quote: the exact words from the conversation that show the todo is open, copied character for character, 5 to 30 words.
 
-Return at most ${MAX_TODOS_PER_SESSION} todos, the most useful first. Return an empty list when nothing is open; that is the usual answer.`;
+Return at most ${MAX_TODOS_PER_SESSION} todos, the most useful first. Return an empty list when nothing is open; that is the usual answer.
+
+Then check the open todos (T1, T2, …). Todos go stale fast: the same conversation often does the work a few minutes after a todo was found, or a commit does it. Put a todo in "closed" only when the conversation or the recent commits show that:
+- the work is done (for example CLAUDE reports that it committed, fixed, ran or removed the thing), or
+- the work is no longer needed (the USER drops it, or the plan changed so it no longer applies).
+A todo that the conversation only mentions, starts, or plans to do is still open. When in doubt, leave it open.
+For each closed todo give:
+- n: its number (3 for T3).
+- reason: one short sentence that says what made it done or not needed.
+- quote: the exact words, 5 to 30, from the conversation or from a commit subject that show it, copied character for character.`;
 
 const SCHEMA = JSON.stringify({
   type: 'object',
@@ -230,18 +439,42 @@ const SCHEMA = JSON.stringify({
         additionalProperties: false,
       },
     },
+    closed: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { n: { type: 'integer' }, reason: { type: 'string' }, quote: { type: 'string' } },
+        required: ['n', 'reason', 'quote'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['todos'],
+  required: ['todos', 'closed'],
   additionalProperties: false,
 });
 
 interface Found { title: string; detail: string; quote: string }
+interface Closed { n: number; reason: string; quote: string }
 
-async function ask(s: Session, text: string, existing: Todo[]): Promise<Found[]> {
-  const known = existing.length
-    ? existing.map((t) => `- [${t.status}] ${t.title}`).join('\n')
+/** The repository's commits since the oldest open todo (at most a week back), one subject per line. */
+async function recentCommits(cwd: string, open: Todo[]): Promise<string> {
+  if (!open.length) return '';
+  const since = Math.max(Math.min(...open.map((t) => t.createdAt)), Date.now() - 7 * 86_400_000) - 60_000;
+  try {
+    return await git(cwd, ['log', `--since=${new Date(since).toISOString()}`, '-n', '40', '--format=%h %s']);
+  } catch { return ''; }
+}
+
+async function ask(s: Session, text: string, open: Todo[], past: Todo[], commits: string): Promise<{ todos: Found[]; closed: Closed[] }> {
+  const openList = open.length
+    ? open.map((t, i) => `T${i + 1}. ${t.title}${t.detail ? ` (${clip(t.detail, 200)})` : ''}`).join('\n')
     : '(none)';
-  const prompt = `Project folder: ${s.cwd}\nSession: ${s.title || s.firstPrompt}\n\nExisting todos (do not repeat these):\n${known}\n\n<conversation>\n${text}\n</conversation>`;
+  const pastList = past.length ? past.map((t) => `- [${t.status}] ${t.title}`).join('\n') : '(none)';
+  const prompt = `Project folder: ${s.cwd}\nSession: ${s.title || s.firstPrompt}\n\n`
+    + `Open todos (do not repeat these; check if they are closed):\n${openList}\n\n`
+    + `Earlier todos, done or rejected (do not repeat these):\n${pastList}\n\n`
+    + `Recent commits in this repository:\n${commits || '(none)'}\n\n`
+    + `<conversation>\n${text}\n</conversation>`;
   const model = loadSettings().todoModel || 'claude-opus-5-5';
   fs.mkdirSync(WORK_DIR, { recursive: true });
   // No tools, no MCP servers (their tool lists cost ~30k tokens a call), no transcript left behind.
@@ -253,8 +486,12 @@ async function ask(s: Session, text: string, existing: Todo[]): Promise<Found[]>
   if (j.is_error) throw new Error(String(j.result || j.subtype || 'claude failed').slice(0, 200));
   const todos = j.structured_output?.todos;
   if (!Array.isArray(todos)) throw new Error('the model returned no todo list');
-  return todos.filter((t: any) => t && typeof t.title === 'string' && typeof t.quote === 'string')
-    .map((t: any) => ({ title: t.title, detail: typeof t.detail === 'string' ? t.detail : '', quote: t.quote }));
+  const closed = Array.isArray(j.structured_output?.closed) ? j.structured_output.closed : [];
+  return {
+    todos: todos.filter((t: any) => t && typeof t.title === 'string' && typeof t.quote === 'string')
+      .map((t: any) => ({ title: t.title, detail: typeof t.detail === 'string' ? t.detail : '', quote: t.quote })),
+    closed: closed.filter((c: any) => c && Number.isInteger(c.n) && typeof c.reason === 'string' && typeof c.quote === 'string'),
+  };
 }
 
 function run(cmd: string, args: string[], input: string): Promise<string> {
