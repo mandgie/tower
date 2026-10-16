@@ -3,9 +3,10 @@ import type { Session } from '../../../shared/types';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
 import { LoopBadge } from './LoopBadge';
+import { TodoBadge } from './Workspace';
 
-export function SessionHeader({ session: s, onResume, onFork, onKill }: {
-  session: Session; onResume?: () => void; onFork?: () => void; onKill?: () => void;
+export function SessionHeader({ session: s, onResume, onFork, onKill, onTodo }: {
+  session: Session; onResume?: () => void; onFork?: () => void; onKill?: () => void; onTodo?: (id: string) => void;
 }) {
   const home = '~';
   const cwd = s.cwd.replace(/^\/Users\/[^/]+/, home);
@@ -21,6 +22,7 @@ export function SessionHeader({ session: s, onResume, onFork, onKill }: {
         <div className="head-title">
           <span className="agent-badge">{s.agent === 'claude' ? 'Claude' : 'Codex'}</span>
           <h2>{s.title || 'Untitled'}</h2>
+          {s.todo && onTodo && <TodoBadge todo={s.todo} onClick={() => onTodo(s.todo!.id)} />}
           {s.live && <span className={`pill status-${s.status}`}>{external ? 'in another terminal' : statusWord(s.status)}</span>}
         </div>
         <div className="head-meta">

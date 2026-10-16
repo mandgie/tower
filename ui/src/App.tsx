@@ -63,6 +63,7 @@ export function App() {
   const [renaming, setRenaming] = useState<string | null>(null);
   useEffect(() => { localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? '1' : '0'); }, [sidebarOpen]);
   const [todosOpen, setTodosOpen] = useState(() => localStorage.getItem(TODOS_KEY) === '1');
+  const [todoFocus, setTodoFocus] = useState<{ id: string; at: number } | null>(null);
   useEffect(() => { localStorage.setItem(TODOS_KEY, todosOpen ? '1' : '0'); }, [todosOpen]);
 
   useEffect(() => { localStorage.setItem(WS_KEY, JSON.stringify({ workspaces, activeId })); }, [workspaces, activeId]);
@@ -113,6 +114,13 @@ export function App() {
     });
   }, []);
 
+  /** A session's Todo badge: open the panel on the todo's workspace and flash the todo. */
+  const showTodo = useCallback((id: string) => {
+    const t = todos.find((x) => x.id === id);
+    if (t && t.workspace !== activeId && workspaces.some((w) => w.id === t.workspace)) updateWs((ws) => ({ workspaces: ws, activeId: t.workspace }));
+    setTodosOpen(true);
+    setTodoFocus({ id, at: Date.now() });
+  }, [todos, activeId, workspaces, updateWs]);
   // Follow panes whose tmux session was renamed (a Claude process moved to a new session id after
   // /clear, or a Codex launch learned its thread id), and drop panes whose tmux session is gone.
   useEffect(() => {
@@ -420,11 +428,11 @@ export function App() {
             {workspaces.map((w) => (
               <PaneGrid key={w.id} workspace={w} byTmux={byTmux} focused={focused} visible={!transcriptMode && w.id === activeId}
                 onFocus={(tmux) => { setFocused(tmux); const s = byTmux.get(tmux); if (s) setSelectedKey(s.key); }}
-                onSwap={swapPanes} onMaximize={setMaximized} onRemove={removePane} onKill={killPane} onAdd={duplicate} />
+                onSwap={swapPanes} onMaximize={setMaximized} onRemove={removePane} onKill={killPane} onAdd={duplicate} onTodo={showTodo} />
             ))}
             {transcriptMode && selected && (
               <div className="transcript-view">
-                <SessionHeader session={selected} onResume={() => resume(selected)} onFork={() => resume(selected, true)} />
+                <SessionHeader session={selected} onResume={() => resume(selected)} onFork={() => resume(selected, true)} onTodo={showTodo} />
                 <Transcript key={selected.key} session={selected} />
               </div>
             )}
@@ -440,7 +448,7 @@ export function App() {
           </div>
           {todosOpen && active && (
             <TodoPanel workspace={active} todos={todos.filter((t) => t.workspace === active.id)}
-              scan={snapshot?.todoScans?.find((s) => s.workspace === active.id)} byKey={byKey} byTmux={byTmux}
+              scan={snapshot?.todoScans?.find((s) => s.workspace === active.id)} byKey={byKey} byTmux={byTmux} focus={todoFocus}
               onToggle={(on) => setWorkspaceTodos(active.id, on)} onOpenSession={select} onClose={() => setTodosOpen(false)}
               onStart={async (t) => {
                 const r = await api.startTodo(t.id, localStorage.getItem('ms.skipPerms') !== '0');

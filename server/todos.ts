@@ -89,6 +89,25 @@ export async function startTodo(id: string, sessions: Session[], skipPermissions
   return r;
 }
 
+/**
+ * Mark each session that a todo started. The key is known at launch; after /clear the session gets a new
+ * key, but its pane keeps following the tmux renames, so match the pane name too.
+ */
+export function linkTodoSessions(sessions: Session[], renamed: Record<string, string>): void {
+  const byKey = new Map<string, Todo>();
+  const byTmux = new Map<string, Todo>();
+  for (const t of store.todos) {
+    if (!t.startedIn) continue;
+    if (t.startedIn.key) byKey.set(t.startedIn.key, t);
+    byTmux.set(renamed[t.startedIn.tmux] ?? t.startedIn.tmux, t);
+  }
+  if (!byKey.size && !byTmux.size) return;
+  for (const s of sessions) {
+    const t = byKey.get(s.key) ?? (s.live?.kind === 'tmux' ? byTmux.get(s.live.tmux) : undefined);
+    if (t) s.todo = { id: t.id, title: t.title, status: t.status };
+  }
+}
+
 /** Called on every snapshot tick; starts a scan of each enabled workspace at most every SCAN_EVERY_MS. */
 export function todoTick(workspaces: WorkspaceSummary[], sessions: Session[], now = Date.now()): void {
   if (now - lastTick < SCAN_EVERY_MS) return;

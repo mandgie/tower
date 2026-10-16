@@ -14,7 +14,7 @@ import { saveUpload, isUpload, uploadFile } from './uploads.js';
 import { applyDone, setViewing } from './seen.js';
 import { loadWorkspaces, saveWorkspaces, workspaceOps, addWorkspaceOp, clearWorkspaceOp } from './workspaces.js';
 import { runDoctor, doctorSummary } from './doctor.js';
-import { todoState, todoTick, scanWorkspace, setTodoStatus, startTodo, onTodosChange } from './todos.js';
+import { todoState, todoTick, scanWorkspace, setTodoStatus, startTodo, linkTodoSessions, onTodosChange } from './todos.js';
 import { applyRemote, remoteInfo, rotateToken, isPaired, isLoopback, peerAllowed, originMatchesHost, handlePair, unpairedPage } from './remote.js';
 import type { Snapshot, SnapshotDelta } from '../shared/types.js';
 
@@ -50,6 +50,7 @@ async function refresh(): Promise<Snapshot> {
     next.workspaces = loadWorkspaces();
     next.workspaceOps = workspaceOps();
     Object.assign(next, todoState());
+    linkTodoSessions(next.sessions, next.renamed);
     todoTick(next.workspaces, next.sessions);
     const delta: SnapshotDelta = { generatedAt: next.generatedAt, upsert: [], remove: [] };
     const sessions = new Map<string, string>();

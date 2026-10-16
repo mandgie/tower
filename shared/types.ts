@@ -40,6 +40,7 @@ export interface Session {
   agentName?: string;  // claude's own session name (e.g. fpl-72)
   context?: SessionContext;  // context window fill after the last turn, from the transcript tail
   loop?: SessionLoop;        // a /loop (or other scheduled prompt) armed in this live Claude process
+  todo?: { id: string; title: string; status: TodoStatus };  // the todo this session was started for (server/todos.ts)
 }
 
 /** What Claude's own scheduler will run next, read from ScheduleWakeup / CronCreate calls in the transcript. */
