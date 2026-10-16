@@ -8,7 +8,7 @@ import { shellEnv } from './shell.js';
 import { loadSettings } from './settings.js';
 import { userText, isRealPrompt } from './claude.js';
 import { launchNew } from './sessions.js';
-import type { Session, Todo, TodoScan, TodoStatus, WorkspaceSummary } from '../shared/types.js';
+import type { Session, Todo, TodoScan, TodoStatus, TodoWorktree, WorkspaceSummary } from '../shared/types.js';
 
 /**
  * The todo finder. For each workspace that has it on, it reads the turns its Claude sessions added since
@@ -72,6 +72,7 @@ export function setTodoStatus(id: string, status: TodoStatus): Todo {
   if (!t) throw new Error('Unknown todo');
   t.status = status;
   t.decidedAt = Date.now();
+  if (status === 'done' || status === 'rejected') lastWorktreeTick = 0; // clean up its worktree soon
   save();
   onChange();
   return t;
@@ -101,14 +102,17 @@ async function todoWorktree(t: Todo): Promise<{ cwd: string; path: string; branc
   // The todo's folder may be untracked, and then it is not in the worktree.
   const inside = (dir: string) => (fs.existsSync(path.join(dir, prefix)) ? path.resolve(dir, prefix) : dir);
   const old = t.startedIn?.worktree;
-  if (old && fs.existsSync(old.path)) return { cwd: inside(old.path), ...old };
+  if (old && !old.removedAt && fs.existsSync(old.path)) return { cwd: inside(old.path), path: old.path, branch: old.branch, base: old.base };
   const short = t.id.slice(0, 8);
   const slug = t.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
   const branch = `todo/${slug || 'task'}-${short}`;
   const dir = path.join(WORKTREES, `${path.basename(top)}-${short}`);
   const base = (await git(top, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')) || (await git(top, ['rev-parse', '--short', 'HEAD']));
   fs.mkdirSync(WORKTREES, { recursive: true });
-  await git(top, ['worktree', 'add', '-b', branch, dir, 'HEAD']);
+  // The branch outlives its worktree when someone removed only the folder: check it out again.
+  const kept = await git(top, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false);
+  if (kept) await git(top, ['worktree', 'prune']);
+  await git(top, kept ? ['worktree', 'add', dir, branch] : ['worktree', 'add', '-b', branch, dir, 'HEAD']);
   return { cwd: inside(dir), path: dir, branch, base };
 }
 
@@ -136,6 +140,95 @@ export async function startTodo(id: string, sessions: Session[], skipPermissions
   save();
   onChange();
   return r;
+}
+
+/** How often todoWorktreeTick looks at the worktrees: a few git commands per worktree. */
+const WORKTREE_EVERY_MS = 2 * 60_000;
+let lastWorktreeTick = 0;
+let worktreeBusy = false;
+
+/** The main checkout the worktree belongs to: git commands about the branch run there. */
+const repoOf = (t: Todo) => t.cwd;
+
+/** True when a live session runs inside the worktree, so its folder must stay. */
+function inUse(wt: TodoWorktree, sessions: Session[]): boolean {
+  return sessions.some((s) => s.live && s.status !== 'ended' && (s.cwd === wt.path || s.cwd.startsWith(wt.path + path.sep)));
+}
+
+/**
+ * Uncommitted files in the worktree, and the commits on its branch whose change is not in the base.
+ * `git cherry` compares patches, so a branch that was rebased or cherry-picked into the base counts as merged.
+ */
+async function checkWorktree(t: Todo, wt: TodoWorktree): Promise<NonNullable<TodoWorktree['check']>> {
+  const dirty = (await git(wt.path, ['status', '--porcelain'])).split('\n').filter(Boolean).length;
+  const ahead = await git(repoOf(t), ['cherry', wt.base, wt.branch])
+    .then((out) => out.split('\n').filter((l) => l.startsWith('+')).length, () => undefined);
+  return { dirty, ahead };
+}
+
+/**
+ * Remove the todo's worktree and delete its branch. Without `force` it refuses while the worktree has
+ * uncommitted files or the branch has work that is not in the base. It always refuses while a session runs in it.
+ */
+export async function removeTodoWorktree(id: string, sessions: Session[], force = false): Promise<Todo> {
+  const t = store.todos.find((x) => x.id === id);
+  if (!t) throw new Error('Unknown todo');
+  const wt = t.startedIn?.worktree;
+  if (!wt || wt.removedAt) throw new Error('The todo has no worktree');
+  if (inUse(wt, sessions)) throw new Error('A session still runs in the worktree. Close it first.');
+  if (fs.existsSync(wt.path)) {
+    const c = wt.check = await checkWorktree(t, wt);
+    if (!force) {
+      if (c.dirty) throw new Error(`The worktree has ${c.dirty} uncommitted ${c.dirty === 1 ? 'file' : 'files'}.`);
+      if (c.ahead === undefined) throw new Error(`Tower cannot compare ${wt.branch} with ${wt.base}.`);
+      if (c.ahead) throw new Error(`${wt.branch} has ${c.ahead} ${c.ahead === 1 ? 'commit' : 'commits'} that ${wt.base} does not have.`);
+    }
+    await git(repoOf(t), ['worktree', 'remove', ...(force ? ['--force'] : []), wt.path]);
+  } else {
+    await git(repoOf(t), ['worktree', 'prune']).catch(() => {});
+  }
+  // -D: checkWorktree already found the work in the base (or the user forced it), also after a rebase that -d misses.
+  await git(repoOf(t), ['branch', '-D', wt.branch]).catch(() => {});
+  wt.removedAt = Date.now();
+  save();
+  onChange();
+  return t;
+}
+
+/**
+ * Called on every snapshot tick. At most every WORKTREE_EVERY_MS it checks each todo worktree, so the
+ * panel can show unmerged work, and it removes the worktree and branch of a done or rejected todo when
+ * nothing would be lost: no uncommitted files, every commit in the base, and no session running in it.
+ */
+export function todoWorktreeTick(sessions: Session[], now = Date.now()): void {
+  if (worktreeBusy || now - lastWorktreeTick < WORKTREE_EVERY_MS) return;
+  const todos = store.todos.filter((t) => t.startedIn?.worktree && !t.startedIn.worktree.removedAt);
+  if (!todos.length) return;
+  lastWorktreeTick = now;
+  worktreeBusy = true;
+  (async () => {
+    let changed = false;
+    for (const t of todos) {
+      const wt = t.startedIn!.worktree!;
+      try {
+        if (!fs.existsSync(wt.path)) {
+          // Someone removed the folder by hand: forget the worktree; keep the branch, it may hold work.
+          await git(repoOf(t), ['worktree', 'prune']).catch(() => {});
+          wt.removedAt = Date.now();
+          changed = true;
+          continue;
+        }
+        const c = await checkWorktree(t, wt);
+        if (JSON.stringify(c) !== JSON.stringify(wt.check)) { wt.check = c; changed = true; }
+        const finished = t.status === 'done' || t.status === 'rejected';
+        if (finished && c.dirty === 0 && c.ahead === 0 && !inUse(wt, sessions)) {
+          await removeTodoWorktree(t.id, sessions);
+          changed = false; // removeTodoWorktree saved and told the clients
+        }
+      } catch { /* try again next round */ }
+    }
+    if (changed) { save(); onChange(); }
+  })().finally(() => { worktreeBusy = false; });
 }
 
 /**
