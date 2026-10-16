@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Session, Message, Block, SessionStats } from '../../../shared/types';
 import { api } from '../api';
 import { fmtTokens, contextLevel } from './ContextBadge';
@@ -142,9 +142,26 @@ function Msg({ m, agent }: { m: Message; agent: Session['agent'] }) {
   );
 }
 
+// A Markdown link `[label](https://…)`, or a bare http(s) URL without trailing punctuation.
+const LINK = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>()\[\]"'`]*[^\s<>()\[\]"'`.,;:!?]/g;
+
+/** Text with its links made tappable. In Electron the window-open handler sends them to the default browser. */
+function Linked({ text }: { text: string }) {
+  const out: ReactNode[] = [];
+  let from = 0;
+  for (const m of text.matchAll(LINK)) {
+    out.push(text.slice(from, m.index));
+    const href = m[2] ?? m[0];
+    out.push(<a key={m.index} href={href} target="_blank" rel="noopener noreferrer">{m[1] ?? m[0]}</a>);
+    from = m.index! + m[0].length;
+  }
+  out.push(text.slice(from));
+  return <>{out}</>;
+}
+
 function BlockView({ b }: { b: Block }) {
   const [open, setOpen] = useState(false);
-  if (b.type === 'text') return <div className="blk text">{b.text}</div>;
+  if (b.type === 'text') return <div className="blk text"><Linked text={b.text} /></div>;
   if (b.type === 'image') return b.url
     ? <a className="blk-img" href={b.url} target="_blank" rel="noreferrer"><img src={b.url} alt="Attached picture" loading="lazy" /></a>
     : <span className="blk-img none">Picture</span>;

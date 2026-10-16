@@ -30,7 +30,7 @@ export const api = {
   projectDirs: () => j<{ dirs: string[] }>('/api/projects/dirs'),
   folder: (path: string) => j<FolderInfo>(`/api/folder?path=${encodeURIComponent(path)}`),
   doctor: () => j<DoctorResult>('/api/doctor'),
-  capture: (tmux: string, lines = 0) => j<{ text: string; alt: boolean; mouse: boolean }>(`/api/tmux/${encodeURIComponent(tmux)}/capture?lines=${lines}`),
+  capture: (tmux: string, lines = 0) => j<{ text: string; alt: boolean; mouse: boolean; width: number }>(`/api/tmux/${encodeURIComponent(tmux)}/capture?lines=${lines}`),
   scroll: (tmux: string, lines: number) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/scroll`, { method: 'POST', body: JSON.stringify({ lines }) }),
   send: (tmux: string, text: string, enter = true, files: string[] = []) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/send`, { method: 'POST', body: JSON.stringify({ text, enter, files }) }),
   upload: (file: Blob) => j<{ path: string }>('/api/uploads', { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file }),

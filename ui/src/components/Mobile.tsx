@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import type { Agent, Session, Snapshot, WorkspaceSummary, WorkspaceOpRequest } from '../../../shared/types';
 import { placementTarget, applyWorkspaceOp } from '../../../shared/snapshot';
 import { api, relTime, useNow, useSnapshot, type LaunchBody } from '../api';
@@ -512,14 +512,15 @@ function SessionView({ s, connected, onBack, onMenu }: { s: Session; connected: 
  * sends the wheel events a full-screen agent scrolls on. With `edges`, the element scrolls natively
  * first and only a drag past its top or bottom goes to the pane.
  */
-function useDragScroll(ref: RefObject<HTMLElement>, tmux: string, opts: { active: boolean; edges: boolean; after?: (lines: number) => void }) {
+function useDragScroll(ref: RefObject<HTMLElement>, tmux: string, opts: { active: boolean; edges: boolean; after?: (lines: number) => void; step?: () => number }) {
   const after = useRef(opts.after);
   after.current = opts.after;
+  const step = useRef(opts.step);
+  step.current = opts.step;
   useEffect(() => {
     const el = ref.current;
     if (!el || !opts.active) return;
-    const STEP = 14; // px of drag per line
-    let lastY = 0, acc = 0, pending = 0;
+    let lastX = 0, lastY = 0, acc = 0, pending = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const flush = () => {
       timer = undefined;
@@ -532,16 +533,20 @@ function useDragScroll(ref: RefObject<HTMLElement>, tmux: string, opts: { active
         const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 1;
         if (!((dy > 0 && atTop) || (dy < 0 && atBottom))) { acc = 0; return false; }
       }
+      // px of drag per pane line, so the text keeps up with the finger
+      const STEP = step.current?.() || 14;
       acc += dy;
       while (Math.abs(acc) >= STEP) { const d = Math.sign(acc); pending += d; acc -= d * STEP; }
-      if (pending && !timer) timer = setTimeout(flush, 60);
+      if (pending && !timer) timer = setTimeout(flush, 30);
       return true;
     };
-    const onStart = (e: TouchEvent) => { lastY = e.touches[0].clientY; acc = 0; };
+    const onStart = (e: TouchEvent) => { lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; acc = 0; };
     const onMove = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
-      const y = e.touches[0].clientY;
-      const dy = y - lastY; lastY = y;
+      const { clientX: x, clientY: y } = e.touches[0];
+      const dx = x - lastX, dy = y - lastY; lastX = x; lastY = y;
+      // A sideways drag scrolls a wide table, not the pane.
+      if (Math.abs(dx) > Math.abs(dy)) return;
       if (drag(dy) && e.cancelable) e.preventDefault();
     };
     const onWheel = (e: WheelEvent) => { if (drag(-e.deltaY)) { e.preventDefault(); e.stopPropagation(); } };
@@ -563,7 +568,7 @@ function useDragScroll(ref: RefObject<HTMLElement>, tmux: string, opts: { active
  * cannot. A full-screen agent keeps no tmux scrollback, so dragging past the top scrolls the agent itself.
  */
 function Screen({ tmux }: { tmux: string }) {
-  const [cap, setCap] = useState<{ text: string; mouse: boolean } | null>(null);
+  const [cap, setCap] = useState<{ text: string; mouse: boolean; width: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const refresh = useRef<() => void>(() => {});
@@ -571,42 +576,177 @@ function Screen({ tmux }: { tmux: string }) {
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
+    let burst: ReturnType<typeof setTimeout>[] = [];
+    let sent = 0, shown = 0;
     const load = async () => {
+      const seq = ++sent;
       try {
         const r = await api.capture(tmux, 400);
-        if (alive) setCap((c) => (c && c.text === r.text && c.mouse === r.mouse ? c : { text: r.text, mouse: r.mouse }));
+        // Burst captures overlap; an older answer must not replace a newer frame.
+        if (seq < shown) return;
+        shown = seq;
+        if (alive) setCap((c) => (c && c.text === r.text && c.mouse === r.mouse && c.width === r.width ? c : { text: r.text, mouse: r.mouse, width: r.width }));
       } catch { /* keep the last frame */ }
     };
     const tick = async () => {
       if (document.visibilityState === 'visible') await load();
       if (alive) timer = setTimeout(tick, 1000);
     };
-    refresh.current = () => { void load(); };
+    // The agent redraws a moment after a scroll, so look again a few times rather than wait for the next tick.
+    refresh.current = () => { burst.forEach(clearTimeout); burst = [0, 50, 120, 250, 500].map((ms) => setTimeout(load, ms)); };
     tick();
-    return () => { alive = false; clearTimeout(timer); };
+    return () => { alive = false; clearTimeout(timer); burst.forEach(clearTimeout); };
   }, [tmux]);
 
+  const text = cap?.text ?? null;
   // Lines the agent is scrolled back, as far as this view knows, for the "Latest" button.
   const [back, setBack] = useState(0);
-  useDragScroll(ref, tmux, { active: !!cap?.mouse, edges: true, after: (n) => { setBack((b) => Math.max(0, b + n)); refresh.current(); } });
+  // One pane line wraps to several on a phone, so a line of scroll is worth that many px of drag.
+  const step = () => { const el = ref.current; const rows = text?.split('\n').length; return el && rows ? Math.min(80, Math.max(14, el.scrollHeight / rows)) : 14; };
+  useDragScroll(ref, tmux, { active: !!cap?.mouse, edges: true, step, after: (n) => { setBack((b) => Math.max(0, b + n)); refresh.current(); } });
   const latest = async () => { setBack(0); await api.scroll(tmux, -200).catch(() => {}); refresh.current(); };
-  const text = cap?.text ?? null;
 
   useLayoutEffect(() => { const el = ref.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, [text]);
 
+  const blocks = useMemo(() => (text == null ? [] : layoutScreen(text, cap!.width)), [text, cap?.width]);
   if (text == null) return <div className="m-note">Reading the screen…</div>;
-  // The pane's empty rows between the output and the input box are noise on a small screen.
-  const lines = text.replace(/\s+$/, '').replace(/\n(\s*\n){2,}/g, '\n\n').split('\n').map((l) => l.replace(/\s+$/, ''));
   return (
     <>
     {back > 0 && <button className="m-latest" onClick={latest}>↓ Latest</button>}
     <div className="m-screen-text" ref={ref} onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
-      {lines.map((l, i) => /^[\s─━═╌┄-]+$/.test(l) && l.trim().length > 8
-        ? <hr key={i} />
-        : <div key={i} className="m-line">{l || ' '}</div>)}
+      {blocks.map((b, i) => b.kind === 'rule' ? <hr key={i} />
+        : b.kind === 'table' ? (
+          <div key={i} className="m-table" style={{ '--cols': Math.max(...b.lines.map((l) => l.t.length)) } as CSSProperties}>
+            {b.lines.map((l, j) => <Fragment key={j}>{j > 0 && '\n'}<Runs line={l} /></Fragment>)}
+          </div>
+        )
+        : <div key={i} className="m-line" style={b.hang ? { paddingLeft: `${b.hang}ch`, textIndent: `-${b.hang}ch` } : undefined}>{b.line.t ? <Runs line={b.line} /> : ' '}</div>)}
     </div>
     </>
   );
+}
+
+/** One screen line: its text, and the attribute bits (`ATTR`) and OSC 8 link target of each UTF-16 unit. */
+type Styled = { t: string; s: number[]; h: (string | undefined)[] };
+type ScreenBlock = { kind: 'rule' } | { kind: 'table'; lines: Styled[] } | { kind: 'line'; line: Styled; hang: number };
+
+const ATTR = { bold: 1, dim: 2, italic: 4, underline: 8, strike: 16 };
+const ATTR_CLASS: [number, string][] = [[ATTR.bold, 'sb'], [ATTR.dim, 'sd'], [ATTR.italic, 'si'], [ATTR.underline, 'su'], [ATTR.strike, 'ss']];
+
+function Runs({ line }: { line: Styled }) {
+  const out: ReactNode[] = [];
+  for (let i = 0; i < line.t.length;) {
+    let j = i + 1;
+    while (j < line.t.length && line.s[j] === line.s[i] && line.h[j] === line.h[i]) j++;
+    const a = line.s[i];
+    const href = line.h[i];
+    const text = line.t.slice(i, j);
+    const run = a ? <span key={i} className={ATTR_CLASS.filter(([bit]) => a & bit).map(([, c]) => c).join(' ')}>{text}</span> : text;
+    out.push(href ? <a key={i} href={href} target="_blank" rel="noopener noreferrer">{run}</a> : run);
+    i = j;
+  }
+  return <>{out}</>;
+}
+
+// SGR sequences carry the attributes and OSC 8 the links; anything else (cursor moves) is dropped.
+const ESCAPE = /\x1b(?:\[([0-9;:?]*)([@-~])|\][^\x07\x1b]*(?:\x07|\x1b\\)|.)/g;
+
+function applySgr(a: number, params: string): number {
+  const ps = (params || '0').split(';');
+  for (let k = 0; k < ps.length; k++) {
+    const [head, sub] = ps[k].split(':');
+    const n = Number(head || 0);
+    if (n === 0) a = 0;
+    else if (n === 1) a |= ATTR.bold;
+    else if (n === 2) a |= ATTR.dim;
+    else if (n === 3) a |= ATTR.italic;
+    else if (n === 4) a = sub === '0' ? a & ~ATTR.underline : a | ATTR.underline;
+    else if (n === 9) a |= ATTR.strike;
+    else if (n === 21) a |= ATTR.underline;
+    else if (n === 22) a &= ~(ATTR.bold | ATTR.dim);
+    else if (n === 23) a &= ~ATTR.italic;
+    else if (n === 24) a &= ~ATTR.underline;
+    else if (n === 29) a &= ~ATTR.strike;
+    else if ((n === 38 || n === 48 || n === 58) && sub === undefined) k += ps[k + 1] === '5' ? 2 : ps[k + 1] === '2' ? 4 : 0;
+  }
+  return a;
+}
+
+/** Splits `capture-pane -e` output into lines of text with attributes, trailing blanks removed. */
+function parseScreen(text: string): Styled[] {
+  const lines: Styled[] = [];
+  let a = 0;
+  let link: string | undefined;
+  for (const raw of text.split('\n')) {
+    let t = '';
+    const s: number[] = [];
+    const h: (string | undefined)[] = [];
+    let from = 0;
+    const add = (chunk: string) => { t += chunk; for (let k = 0; k < chunk.length; k++) { s.push(a); h.push(link); } };
+    ESCAPE.lastIndex = 0;
+    for (let m; (m = ESCAPE.exec(raw));) {
+      add(raw.slice(from, m.index));
+      if (m[2] === 'm') a = applySgr(a, m[1]);
+      else if (m[0].startsWith('\x1b]8;')) link = linkTarget(m[0]);
+      from = ESCAPE.lastIndex;
+    }
+    add(raw.slice(from));
+    t = t.replace(/\s+$/, '');
+    s.length = h.length = t.length;
+    lines.push({ t, s, h });
+  }
+  // The pane's empty rows between the output and the input box are noise on a small screen.
+  const out = lines.filter((l, i) => l.t.trim() || (i > 0 && lines[i - 1].t.trim()));
+  while (out.length && !out[out.length - 1].t.trim()) out.pop();
+  return out;
+}
+
+/** The URI of an OSC 8 sequence (`ESC ] 8 ; params ; URI ST`), if the phone can open it; '' closes the link. */
+function linkTarget(seq: string): string | undefined {
+  const uri = seq.replace(/^\x1b\]8;[^;]*;/, '').replace(/(?:\x07|\x1b\\)$/, '');
+  return /^(?:https?|mailto):/i.test(uri) ? uri : undefined;
+}
+
+const sliceStyled = (l: Styled, from: number): Styled => ({ t: l.t.slice(from), s: l.s.slice(from), h: l.h.slice(from) });
+
+const TABLE_LINE = /^\s*[┌├└│┏┣┗┃╭╰╔╠╚║]/;
+// Indent plus a list or message marker; wrapped lines of the item line up after it.
+const HANG = /^(\s*)((?:[-*•·●○◦▪▸⏺⎿✻※✓✔✗✘☐☒◼◻→❯>]|\d+[.)])\s+)?/;
+
+/**
+ * Undoes the agent's wrapping at the pane width, so a phone can wrap each paragraph or list item again
+ * at its own width with a hanging indent. Box tables keep their columns and scroll sideways instead.
+ */
+function layoutScreen(text: string, width: number): ScreenBlock[] {
+  const out: ScreenBlock[] = [];
+  let prevRaw = ''; // the last line folded into the open paragraph, or '' when none is open
+  for (const line of parseScreen(text)) {
+    const l = line.t;
+    const last = out[out.length - 1];
+    if (/^[\s─━═╌┄-]+$/.test(l) && l.trim().length > 8) { out.push({ kind: 'rule' }); prevRaw = ''; continue; }
+    if (TABLE_LINE.test(l)) {
+      if (last?.kind === 'table') last.lines.push(line); else out.push({ kind: 'table', lines: [line] });
+      prevRaw = '';
+      continue;
+    }
+    const m = HANG.exec(l)!;
+    const body = sliceStyled(line, m[0].length);
+    // A soft wrap: no marker, indented to the open item's text, and its first word would not have fit.
+    if (last?.kind === 'line' && prevRaw && l.trim() && !m[2] && m[1].length === last.hang
+      && prevRaw.length + 1 + body.t.split(' ')[0].length > width - 2) {
+      const end = last.line.h[last.line.h.length - 1];
+      last.line = {
+        t: last.line.t + ' ' + body.t,
+        s: [...last.line.s, last.line.s[last.line.s.length - 1] & body.s[0], ...body.s],
+        h: [...last.line.h, end === body.h[0] ? end : undefined, ...body.h],
+      };
+      prevRaw = l;
+      continue;
+    }
+    out.push({ kind: 'line', line, hang: m[0].length });
+    prevRaw = l.trim() ? l : '';
+  }
+  return out;
 }
 
 /** xterm has no touch scrolling, and tmux or the agent owns the scrollback anyway: drags go to the pane. */

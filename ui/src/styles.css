@@ -273,6 +273,7 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .msg-role { display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mist); margin-bottom: 6px; }
 .msg-role time { font-family: var(--font-mono); font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--dim); }
 .blk.text { white-space: pre-wrap; word-break: break-word; }
+.blk.text a { color: #82AAFF; text-decoration: underline; }
 .blk.thinking { color: var(--mist); font-size: 12px; margin: 4px 0; }
 .blk.thinking div { white-space: pre-wrap; padding: 6px 0 0 12px; border-left: 1px solid var(--line); margin-top: 4px; }
 .blk.tool { display: flex; gap: 10px; font-family: var(--font-mono); font-size: 11.5px; color: var(--mist); padding: 2px 0; cursor: pointer; align-items: baseline; }
@@ -388,6 +389,15 @@ html.kb-open .m-app, html.kb-open .m-sheet-back { height: var(--vvh); }
 .m-term .term-wrap { position: absolute; inset: 0; }
 .m-screen-text { flex: 1; overflow: auto; margin: 8px 12px 0; padding: 10px; background: #0F1418; border: 1px solid var(--line); border-radius: 10px; font: 11.5px/1.35 var(--font-mono); color: var(--fog); -webkit-overflow-scrolling: touch; }
 .m-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Shrinks a table to the phone's width, down to a size that still reads; a wider one scrolls sideways. */
+.m-table { white-space: pre; line-height: 1.2; font-size: max(8px, min(11.5px, calc((100vw - 48px) / var(--cols) / 0.61))); overflow-x: auto; scrollbar-width: none; margin: 2px 0; }
+.m-table::-webkit-scrollbar { display: none; }
+.m-screen-text .sb { font-weight: 700; color: #FFFFFF; }
+.m-screen-text .sd { opacity: 0.6; }
+.m-screen-text .si { font-style: italic; }
+.m-screen-text .su { text-decoration: underline; }
+.m-screen-text .ss { text-decoration: line-through; }
+.m-screen-text a { color: #82AAFF; text-decoration: underline; }
 .m-screen-text hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
 
 .m-dock { flex: 0 0 auto; position: relative; background: var(--panel); border-top: 1px solid var(--line); padding: 8px 12px max(10px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }

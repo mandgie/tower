@@ -33,6 +33,9 @@ const TMUX_OPTIONS: [string, string][] = [
   ['window-size', 'latest'],
   ['set-clipboard', 'on'],
   ['terminal-overrides', ',xterm-256color:RGB,tmux-256color:RGB'],
+  // Pass OSC 8 hyperlinks (Claude Code's Markdown links) through to xterm.js. Without this tmux keeps
+  // the link text and drops the URL. A fixed index so applying it again to a running server is a no-op.
+  ['terminal-features[9]', 'xterm*:hyperlinks'],
 ];
 
 function writeConf(): void {
@@ -139,19 +142,21 @@ export async function pressKeys(name: string, keys: string[]): Promise<void> {
 }
 
 /** The pane's text: the visible screen plus `lines` of scrollback above it (0 for the screen alone). */
-export async function capturePane(name: string, lines = 60): Promise<string> {
-  return (await tmuxQuiet(['capture-pane', '-p', '-t', `=${name}:`, '-S', `-${lines}`])) ?? '';
+/** With `escapes`, the text keeps its SGR sequences (bold, colors) for the client to read. */
+export async function capturePane(name: string, lines = 60, escapes = false): Promise<string> {
+  return (await tmuxQuiet(['capture-pane', '-p', ...(escapes ? ['-e'] : []), '-t', `=${name}:`, '-S', `-${lines}`])) ?? '';
 }
 
 export interface PaneModes {
   alt: boolean;     // full-screen app on the alternate screen: tmux keeps no scrollback for it
   mouse: boolean;   // the app asked for mouse events (SGR), so it scrolls itself on wheel input
+  width: number;    // columns the agent wraps its output at
 }
 
 export async function paneModes(name: string): Promise<PaneModes> {
-  const out = (await tmuxQuiet(['display', '-p', '-t', `=${name}:`, '#{alternate_on} #{mouse_any_flag}#{mouse_button_flag}#{mouse_standard_flag} #{mouse_sgr_flag}'])) ?? '';
-  const [alt, flags, sgr] = out.trim().split(' ');
-  return { alt: alt === '1', mouse: /1/.test(flags || '') && sgr === '1' };
+  const out = (await tmuxQuiet(['display', '-p', '-t', `=${name}:`, '#{alternate_on} #{mouse_any_flag}#{mouse_button_flag}#{mouse_standard_flag} #{mouse_sgr_flag} #{pane_width}'])) ?? '';
+  const [alt, flags, sgr, width] = out.trim().split(' ');
+  return { alt: alt === '1', mouse: /1/.test(flags || '') && sgr === '1', width: Number(width) || 80 };
 }
 
 /**

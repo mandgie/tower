@@ -213,7 +213,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       if (mm[2] === 'kill' && m === 'POST') { await closeTmux(name); setTimeout(refresh, 200); return json(res, 200, { ok: true }); }
       if (mm[2] === 'capture') {
         const modes = await paneModes(name);
-        return json(res, 200, { text: await capturePane(name, Number(url.searchParams.get('lines') || 60)), ...modes });
+        return json(res, 200, { text: await capturePane(name, Number(url.searchParams.get('lines') || 60), true), ...modes });
       }
       if (mm[2] === 'scroll' && m === 'POST') { const b = await readBody(req); await scrollPane(name, Number(b.lines) || 0); return json(res, 200, { ok: true }); }
       if (mm[2] === 'send' && m === 'POST') {
