@@ -1,7 +1,7 @@
 import type { Session } from '../../../shared/types';
 import { relTime, useNow } from '../api';
 
-const ORDER: Record<string, number> = { waiting: 0, working: 1, looping: 2, ended: 3, idle: 4 };
+const ORDER: Record<string, number> = { done: 0, working: 1, waiting: 2, looping: 3, ended: 4, idle: 5 };
 
 export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpen, onToggleSidebar }: {
   sessions: Session[]; connected: boolean; onPick: (s: Session) => void; activeKey: string | null;
@@ -9,7 +9,7 @@ export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpe
 }) {
   const now = useNow(5000);
   const live = sessions.filter((s) => s.live).sort((a, b) => (ORDER[a.status] - ORDER[b.status]) || (b.updatedAt - a.updatedAt));
-  const waiting = live.filter((s) => s.status === 'waiting').length;
+  const done = live.filter((s) => s.status === 'done').length;
   const working = live.filter((s) => s.status === 'working').length;
   const looping = live.filter((s) => s.status === 'looping').length;
 
@@ -30,7 +30,7 @@ export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpe
       <div className="strip-summary">
         {live.length === 0 ? <span className="muted">No live sessions</span> : (
           <>
-            {waiting > 0 && <span className="sum sum-wait">{waiting} need{waiting === 1 ? 's' : ''} you</span>}
+            {done > 0 && <span className="sum sum-wait">{done} need{done === 1 ? 's' : ''} you</span>}
             {working > 0 && <span className="sum sum-work">{working} working</span>}
             {looping > 0 && <span className="sum sum-loop">{looping} looping</span>}
           </>
@@ -51,5 +51,5 @@ export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpe
 }
 
 export function statusWord(st: Session['status']): string {
-  return st === 'waiting' ? 'needs you' : st === 'working' ? 'working' : st === 'looping' ? 'looping' : st === 'ended' ? 'exited' : '';
+  return st === 'done' ? 'needs you' : st === 'waiting' ? 'your turn' : st === 'working' ? 'working' : st === 'looping' ? 'looping' : st === 'ended' ? 'exited' : '';
 }

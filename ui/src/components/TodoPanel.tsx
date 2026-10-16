@@ -98,7 +98,7 @@ export function TodoPanel({ workspace, todos, scan, byKey, byTmux, onToggle, onO
                       const r = runner(t);
                       if (r && r.status !== 'ended') return (
                         <button className="todo-runner" onClick={() => onOpenSession(r)} title="Open the session that works on this todo">
-                          <span className={`dot status-${r.status}`} /><span>Session {r.status === 'working' ? 'working' : 'open'}</span>
+                          <span className={`dot status-${r.status}`} /><span>Session {r.status === 'working' ? 'working' : r.status === 'done' ? 'finished a turn' : 'open'}</span>
                         </button>
                       );
                       return (

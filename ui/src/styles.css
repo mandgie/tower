@@ -64,14 +64,14 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .chip.active { border-color: var(--line); background: var(--hover); }
 .chip-name { font-weight: 600; }
 .chip-meta { color: var(--mist); font-size: 11px; }
-.chip.status-waiting .chip-meta { color: var(--wait); }
+.chip.status-done .chip-meta { color: var(--wait); }
 
 /* status dots: color = agent, shape = status */
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--ended); }
 .agent-claude .dot { background: var(--claude); }
 .agent-codex .dot { background: var(--codex); }
 .dot.status-working, .status-working > .dot { animation: pulse 1.4s ease-in-out infinite; }
-.dot.status-waiting, .status-waiting > .dot { background: var(--wait) !important; box-shadow: 0 0 0 3px rgba(255,209,102,0.22); }
+.dot.status-done, .status-done > .dot { background: var(--wait) !important; box-shadow: 0 0 0 3px rgba(255,209,102,0.22); }
 .dot.status-looping, .status-looping > .dot { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--loop); }
 .dot.status-ended, .status-ended > .dot { background: var(--ended) !important; animation: none; }
 .dot.external { background: transparent !important; border: 2px solid currentColor; opacity: 0.7; animation: none; box-shadow: none; }
@@ -197,7 +197,7 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .ctx.high .ctx-fill { background: var(--danger); }
 .ctx.high .ctx-text { color: var(--danger); }
 .head-meta .ctx { font-size: 11px; }
-.pane.status-waiting .pane-status { color: var(--wait); }
+.pane.status-done .pane-status { color: var(--wait); }
 .pane-actions { display: flex; gap: 2px; flex: 0 0 auto; opacity: 0.55; transition: opacity 100ms; }
 .pane:hover .pane-actions, .pane.focused .pane-actions { opacity: 1; }
 .pane-actions button { padding: 1px 6px; border-radius: 4px; font-size: 11px; font-family: var(--font-mono); color: var(--mist); }
@@ -217,7 +217,7 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .hint { color: var(--mist); font-size: 12px; max-width: 320px; text-align: right; }
 .pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--raised); color: var(--mist); flex: 0 0 auto; }
-.pill.status-waiting { background: rgba(255,209,102,0.15); color: var(--wait); }
+.pill.status-done { background: rgba(255,209,102,0.15); color: var(--wait); }
 .pill.status-working { color: var(--fog); }
 .pill.status-looping { background: rgba(157,184,255,0.13); color: var(--loop); }
 .chip.status-looping .chip-meta, .pane.status-looping .pane-status, .m-status.status-looping { color: var(--loop); }
@@ -359,7 +359,7 @@ html.kb-open .m-app, html.kb-open .m-sheet-back { height: var(--vvh); }
 .m-row.agent-claude .rail { background: var(--claude); opacity: 0.35; }
 .m-row.agent-codex .rail { background: var(--codex); opacity: 0.35; }
 .m-row.live .rail { opacity: 1; }
-.m-row.live.status-waiting .rail { background: var(--wait); }
+.m-row.live.status-done .rail { background: var(--wait); }
 .m-row.live.status-looping .rail { background: var(--loop); }
 .m-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .m-row-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -367,7 +367,7 @@ html.kb-open .m-app, html.kb-open .m-sheet-back { height: var(--vvh); }
 .m-row-meta .branch { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
 .m-row-side { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 3px; font-size: 12px; color: var(--dim); flex: 0 0 auto; }
 .m-status { font-size: 12px; color: var(--mist); }
-.m-status.status-waiting { color: var(--wait); font-weight: 600; }
+.m-status.status-done { color: var(--wait); font-weight: 600; }
 .m-status.status-working { color: var(--codex); }
 .m-layout-link { display: block; margin: 24px auto 0; color: var(--dim); font-size: 13px; text-decoration: underline; }
 

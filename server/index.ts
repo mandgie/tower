@@ -11,6 +11,7 @@ import { ensureServer, capturePane, sendKeys, pressKeys, paneModes, scrollPane }
 import { attachTerminal } from './pty.js';
 import { loadSettings, saveSettings } from './settings.js';
 import { saveUpload, isUpload, uploadFile } from './uploads.js';
+import { applyDone, setViewing } from './seen.js';
 import { loadWorkspaces, saveWorkspaces, workspaceOps, addWorkspaceOp, clearWorkspaceOp } from './workspaces.js';
 import { runDoctor, doctorSummary } from './doctor.js';
 import { todoState, todoTick, scanWorkspace, setTodoStatus, startTodo, onTodosChange } from './todos.js';
@@ -45,6 +46,7 @@ async function refresh(): Promise<Snapshot> {
   refreshing = true;
   try {
     const next = await buildSnapshot();
+    applyDone(next.sessions);
     next.workspaces = loadWorkspaces();
     next.workspaceOps = workspaceOps();
     Object.assign(next, todoState());
@@ -172,6 +174,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       res.writeHead(200, { 'content-type': f.type, 'cache-control': 'private, max-age=604800, immutable' });
       fs.createReadStream(f.file).pipe(res);
       return;
+    }
+    if (m === 'POST' && p === '/api/seen') {
+      // Which sessions a window shows now, so a turn that ends there is not marked unread (see seen.ts).
+      const b = await readBody(req);
+      const keys = Array.isArray(b.keys) ? b.keys.filter((k: unknown) => typeof k === 'string').slice(0, 64) : [];
+      setViewing(String(b.client || '').slice(0, 64), keys);
+      refresh();
+      return json(res, 200, { ok: true });
     }
     if (m === 'POST' && p === '/api/uploads') {
       // A picture from the phone, sent as raw bytes with its image type.

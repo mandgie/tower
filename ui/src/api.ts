@@ -34,6 +34,7 @@ export const api = {
   scroll: (tmux: string, lines: number) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/scroll`, { method: 'POST', body: JSON.stringify({ lines }) }),
   send: (tmux: string, text: string, enter = true, files: string[] = []) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/send`, { method: 'POST', body: JSON.stringify({ text, enter, files }) }),
   upload: (file: Blob) => j<{ path: string }>('/api/uploads', { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file }),
+  seen: (client: string, keys: string[]) => j<{ ok: true }>('/api/seen', { method: 'POST', body: JSON.stringify({ client, keys }) }),
   keys: (tmux: string, keys: string[]) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/keys`, { method: 'POST', body: JSON.stringify({ keys }) }),
   workspaceOp: (op: WorkspaceOpRequest) => j<WorkspaceOp>('/api/workspaces/ops', { method: 'POST', body: JSON.stringify(op) }),
   clearWorkspaceOp: (id: string) => j<{ ok: true }>(`/api/workspaces/ops/${encodeURIComponent(id)}`, { method: 'DELETE' }),
@@ -98,4 +99,52 @@ export function useNow(interval = 15000): number {
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), interval); return () => clearInterval(t); }, [interval]);
   return now;
+}
+
+/** This window, for `/api/seen`. */
+const CLIENT = Math.random().toString(36).slice(2, 10);
+/** Without a key or mouse event for this long, a focused Mac window no longer counts as looked at. */
+const AWAY_MS = 5 * 60 * 1000;
+
+/**
+ * Whether someone is looking at this window: it is visible, and on the Mac it also has focus and saw input
+ * in the last five minutes (a Mac left on with Tower in front is not someone reading it).
+ */
+export function usePresent(needFocus: boolean): boolean {
+  const [present, setPresent] = useState(false);
+  useEffect(() => {
+    let lastInput = Date.now();
+    const check = () => setPresent(document.visibilityState === 'visible' && (!needFocus || (document.hasFocus() && Date.now() - lastInput < AWAY_MS)));
+    const input = () => { const was = Date.now() - lastInput >= AWAY_MS; lastInput = Date.now(); if (was) check(); };
+    check();
+    const t = setInterval(check, 30_000);
+    const events = ['pointerdown', 'pointermove', 'keydown', 'wheel'] as const;
+    for (const e of events) window.addEventListener(e, input, { capture: true, passive: true });
+    document.addEventListener('visibilitychange', check);
+    window.addEventListener('focus', check);
+    window.addEventListener('blur', check);
+    return () => {
+      clearInterval(t);
+      for (const e of events) window.removeEventListener(e, input, { capture: true });
+      document.removeEventListener('visibilitychange', check);
+      window.removeEventListener('focus', check);
+      window.removeEventListener('blur', check);
+    };
+  }, [needFocus]);
+  return present;
+}
+
+/** Tell the server which sessions this window shows, so a turn that ends in view is not marked `done`. */
+export function useViewing(keys: string[], present: boolean): void {
+  const list = present ? [...new Set(keys)].sort().join('\n') : '';
+  useEffect(() => {
+    const keys = list ? list.split('\n') : [];
+    const send = () => { api.seen(CLIENT, keys).catch(() => {}); };
+    send();
+    if (!keys.length) return;
+    const t = setInterval(send, 15_000);
+    const leave = () => navigator.sendBeacon('/api/seen', JSON.stringify({ client: CLIENT, keys: [] }));
+    window.addEventListener('pagehide', leave);
+    return () => { clearInterval(t); window.removeEventListener('pagehide', leave); };
+  }, [list]);
 }

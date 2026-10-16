@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session, Agent, DoctorResult } from '../../shared/types';
 import { placementTarget, applyWorkspaceOp } from '../../shared/snapshot';
-import { api, useSnapshot, type LaunchBody } from './api';
+import { api, useSnapshot, usePresent, useViewing, type LaunchBody } from './api';
 import { StatusStrip } from './components/StatusStrip';
 import { Sidebar } from './components/Sidebar';
 import { Transcript } from './components/Transcript';
@@ -384,6 +384,11 @@ export function App() {
   // Transcript mode: an idle (or external) session is selected. The grid stays mounted underneath.
   const transcriptMode = !!selected && selected.live?.kind !== 'tmux';
   const showEmpty = !transcriptMode && (active?.panes.length ?? 0) === 0 && workspaces.length === 1;
+
+  // What is on screen counts as read: the transcript, or the panes of the active workspace (only the maximized one).
+  const present = usePresent(true);
+  const onScreen = transcriptMode ? [selected!.key] : (active?.maximized ? [active.maximized] : active?.panes.map((p) => p.tmux) ?? []).flatMap((t) => byTmux.get(t)?.key ?? []);
+  useViewing(onScreen, present);
 
   return (
     <div className="app">

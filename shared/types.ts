@@ -1,7 +1,10 @@
 export type Agent = 'claude' | 'codex';
 
-/** `looping`: waiting at the prompt, but a /loop wakeup or cron job will start the next turn by itself. */
-export type Status = 'working' | 'waiting' | 'looping' | 'ended' | 'idle';
+/**
+ * `done`: at the prompt after a turn nobody has looked at yet (server/seen.ts); `waiting`: at the prompt, already seen.
+ * `looping`: waiting at the prompt, but a /loop wakeup or cron job will start the next turn by itself.
+ */
+export type Status = 'working' | 'done' | 'waiting' | 'looping' | 'ended' | 'idle';
 
 export interface LiveTmux {
   kind: 'tmux';

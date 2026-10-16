@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import type { Agent, Session, Snapshot, WorkspaceSummary, WorkspaceOpRequest } from '../../../shared/types';
 import { placementTarget, applyWorkspaceOp } from '../../../shared/snapshot';
-import { api, relTime, useNow, useSnapshot, type LaunchBody } from '../api';
+import { api, relTime, useNow, useSnapshot, usePresent, useViewing, type LaunchBody } from '../api';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
 import { LoopBadge } from './LoopBadge';
@@ -99,10 +99,11 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   useVisualViewportHeight();
 
   const sessions = snapshot?.sessions ?? [];
-  const waiting = sessions.filter((s) => s.live && s.status === 'waiting').length;
-  useEffect(() => { document.title = waiting ? `(${waiting}) Tower` : 'Tower'; }, [waiting]);
+  const done = sessions.filter((s) => s.live && s.status === 'done').length;
+  useEffect(() => { document.title = done ? `(${done}) Tower` : 'Tower'; }, [done]);
 
   const session = key ? sessions.find((s) => s.key === key) : undefined;
+  useViewing(session ? [session.key] : [], usePresent(false));
   const scopes = useMemo(() => workspaceScopes(snapshot), [snapshot]);
   const scope = scopes.find((x) => x.id === filter) ?? null;
 
@@ -144,7 +145,7 @@ interface Scope {
   cwds: Set<string>;
   cwd?: string;        // where a new session from this chip starts: the most recently active member's folder
   live: number;
-  waiting: number;
+  done: number;        // live sessions with a turn nobody has read
 }
 
 const tmuxOf = (s: Session) => (s.live?.kind === 'tmux' ? s.live.tmux : null);
@@ -175,7 +176,7 @@ function workspaceScopes(snapshot: Snapshot | null): Scope[] {
     const live = members.filter((s) => s.live);
     return {
       id, name, has, cwds: new Set(members.map((s) => s.cwd)), cwd: members[0]?.cwd,
-      live: live.length, waiting: live.filter((s) => s.status === 'waiting').length,
+      live: live.length, done: live.filter((s) => s.status === 'done').length,
     };
   };
   const scopes = all.filter((w: WorkspaceSummary) => w.panes.length).map((w) => {
@@ -189,27 +190,27 @@ function workspaceScopes(snapshot: Snapshot | null): Scope[] {
   return other.live ? [...scopes, other] : scopes;
 }
 
-function ScopeChips({ scopes, scope, total, onScope, onMenu }: { scopes: Scope[]; scope: Scope | null; total: { live: number; waiting: number }; onScope: (id: string) => void; onMenu: (id: string) => void }) {
+function ScopeChips({ scopes, scope, total, onScope, onMenu }: { scopes: Scope[]; scope: Scope | null; total: { live: number; done: number }; onScope: (id: string) => void; onMenu: (id: string) => void }) {
   if (!scopes.length) return null;
-  const chip = (id: string, name: string, live: number, waiting: number, on: boolean) => (
-    <Chip key={id} id={id} name={name} live={live} waiting={waiting} on={on} onScope={onScope} onMenu={id === 'all' || id === 'other' ? undefined : onMenu} />
+  const chip = (id: string, name: string, live: number, done: number, on: boolean) => (
+    <Chip key={id} id={id} name={name} live={live} done={done} on={on} onScope={onScope} onMenu={id === 'all' || id === 'other' ? undefined : onMenu} />
   );
   return (
     <div className="m-chips" role="tablist" aria-label="Workspace">
-      {chip('all', 'All', total.live, total.waiting, !scope)}
-      {scopes.map((x) => chip(x.id, x.name, x.live, x.waiting, scope?.id === x.id))}
+      {chip('all', 'All', total.live, total.done, !scope)}
+      {scopes.map((x) => chip(x.id, x.name, x.live, x.done, scope?.id === x.id))}
     </div>
   );
 }
 
 /** A workspace chip; a long press opens Rename and Close. */
-function Chip({ id, name, live, waiting, on, onScope, onMenu }: {
-  id: string; name: string; live: number; waiting: number; on: boolean; onScope: (id: string) => void; onMenu?: (id: string) => void;
+function Chip({ id, name, live, done, on, onScope, onMenu }: {
+  id: string; name: string; live: number; done: number; on: boolean; onScope: (id: string) => void; onMenu?: (id: string) => void;
 }) {
   const press = useLongPress(onMenu ? () => onMenu(id) : undefined);
   return (
     <button role="tab" aria-selected={on} className={`m-chip ${on ? 'on' : ''} ${id === 'other' ? 'other' : ''}`} onClick={() => onScope(id)} {...press}>
-      {waiting > 0 && <span className="m-chip-wait" aria-label={`${waiting} waiting`} />}
+      {done > 0 && <span className="m-chip-wait" aria-label={`${done} need you`} />}
       <span className="m-chip-name">{name}</span>
       {live > 0 && <span className="m-chip-count">{live}</span>}
     </button>
@@ -228,16 +229,16 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
   useEffect(() => setRecentShown(RECENT_PAGE), [scope?.id]);
   const total = useMemo(() => {
     const live = sessions.filter((s) => s.live);
-    return { live: live.length, waiting: live.filter((s) => s.status === 'waiting').length };
+    return { live: live.length, done: live.filter((s) => s.status === 'done').length };
   }, [sessions]);
   const groups = useMemo(() => {
     const live = sessions.filter((s) => s.live && (!scope || scope.has(s))).sort((a, b) => b.updatedAt - a.updatedAt);
     const recent = sessions.filter((s) => !s.live && (!scope || scope.has(s) || scope.cwds.has(s.cwd)));
     return {
-      waiting: live.filter((s) => s.status === 'waiting'),
+      done: live.filter((s) => s.status === 'done'),
       working: live.filter((s) => s.status === 'working'),
       looping: live.filter((s) => s.status === 'looping'),
-      open: live.filter((s) => s.status !== 'waiting' && s.status !== 'working' && s.status !== 'looping'),
+      open: live.filter((s) => s.status !== 'done' && s.status !== 'working' && s.status !== 'looping'),
       recent: recent.sort((a, b) => b.updatedAt - a.updatedAt),
     };
   }, [sessions, scope]);
@@ -248,7 +249,7 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
         <span className={`beacon ${connected ? 'on' : 'off'}`} />
         <span className="m-brand">Tower</span>
         <span className="m-top-sum">
-          {groups.waiting.length > 0 && <span className="sum-wait">{groups.waiting.length} need{groups.waiting.length === 1 ? 's' : ''} you</span>}
+          {groups.done.length > 0 && <span className="sum-wait">{groups.done.length} need{groups.done.length === 1 ? 's' : ''} you</span>}
           {groups.working.length > 0 && <span className="sum-work">{groups.working.length} working</span>}
         </span>
         <button className="m-icon-btn" onClick={onNew} aria-label="New session">+</button>
@@ -256,11 +257,11 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
       <ScopeChips scopes={scopes} scope={scope} total={total} onScope={onScope} onMenu={onScopeMenu} />
       <div className="m-scroll">
         {!loaded && <div className="m-note">Reading sessions…</div>}
-        <Group title="Needs you" rows={groups.waiting} now={now} onOpen={onOpen} onMenu={onMenu} />
+        <Group title="Needs you" rows={groups.done} now={now} onOpen={onOpen} onMenu={onMenu} />
         <Group title="Working" rows={groups.working} now={now} onOpen={onOpen} onMenu={onMenu} />
         <Group title="Looping" rows={groups.looping} now={now} onOpen={onOpen} onMenu={onMenu} />
         <Group title="Open" rows={groups.open} now={now} onOpen={onOpen} onMenu={onMenu} />
-        {loaded && !groups.waiting.length && !groups.working.length && !groups.looping.length && !groups.open.length && <div className="m-note">{scope ? `Nothing running in ${scope.name}.` : 'No live sessions.'} Resume one below or start a new one with +.</div>}
+        {loaded && !groups.done.length && !groups.working.length && !groups.looping.length && !groups.open.length && <div className="m-note">{scope ? `Nothing running in ${scope.name}.` : 'No live sessions.'} Resume one below or start a new one with +.</div>}
         <Group title={scope && scope.id !== 'other' ? `Recent in ${scope.name}` : 'Recent'} rows={groups.recent.slice(0, recentShown)} now={now} onOpen={onOpen} onMenu={onMenu} />
         {groups.recent.length > recentShown && <button className="btn ghost wide" onClick={() => setRecentShown((n) => n + RECENT_PAGE * 2)}>Show more</button>}
         <button className="m-layout-link" onClick={onDesktop}>Use the desktop layout</button>

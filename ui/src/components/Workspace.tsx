@@ -18,7 +18,7 @@ export function gridColumns(n: number): number {
   return 4;
 }
 
-const RANK: Record<Status, number> = { waiting: 0, working: 1, looping: 2, ended: 3, idle: 4 };
+const RANK: Record<Status, number> = { done: 0, working: 1, waiting: 2, looping: 3, ended: 4, idle: 5 };
 export function summarizeStatus(statuses: Status[]): Status | null {
   if (!statuses.length) return null;
   return statuses.reduce((a, b) => (RANK[a] <= RANK[b] ? a : b));
