@@ -342,6 +342,24 @@ details summary::-webkit-details-marker { display: none; }
 /* ---------- phone layout (components/Mobile.tsx) ---------- */
 .m-app { height: 100dvh; display: flex; flex-direction: column; font-size: 15px; overflow: hidden; }
 html.kb-open .m-app, html.kb-open .m-sheet-back { height: var(--vvh); }
+/* New session on the phone: the desktop dialog as a bottom sheet, kept above the keyboard. */
+.m-modal { place-items: end stretch; backdrop-filter: none; background: rgba(0,0,0,0.55); animation: m-fade 140ms ease-out; }
+.m-modal .modal { width: 100%; max-width: none; max-height: 92%; border-radius: 16px 16px 0 0; border-width: 1px 0 0; padding: 18px 20px calc(env(safe-area-inset-bottom) + 14px); gap: 16px; animation: m-sheet-up 180ms ease-out; }
+html.kb-open .m-modal { height: var(--vvh); }
+html.kb-open .m-modal .modal { max-height: calc(var(--vvh) - 12px); padding-bottom: 14px; }
+.m-modal h2 { font-size: 18px; }
+.m-modal .label { font-size: 13px; }
+.m-modal .seg.big button { padding: 11px 8px; font-size: 15px; }
+.m-modal input, .m-modal textarea { padding: 10px 12px; }
+.m-modal .field-note { font-size: 13px; }
+.m-modal .check { font-size: 15px; color: var(--fog); gap: 10px; min-height: 40px; }
+.m-modal .check input { width: 20px; height: 20px; }
+.m-modal .modal-actions { gap: 10px; }
+.m-modal .modal-actions .btn { flex: 1; justify-content: center; height: 46px; font-size: 16px; }
+.m-dirs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 2px -20px 0; padding: 0 20px; }
+.m-dirs::-webkit-scrollbar { display: none; }
+.m-dirs button { flex: 0 0 auto; height: 34px; padding: 0 12px; border-radius: 17px; background: var(--raised); border: 1px solid var(--line); color: var(--mist); font-size: 14px; }
+.m-dirs button.on { color: var(--fog); border-color: var(--claude); }
 /* iOS zooms into any focused field under 16px. */
 .m-app input, .m-app textarea, .m-app select { font-size: 16px; }
 .m-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }

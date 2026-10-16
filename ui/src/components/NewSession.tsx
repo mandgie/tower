@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { Agent, Project } from '../../../shared/types';
 import { api, type FolderInfo, type LaunchBody } from '../api';
 
-export function NewSession({ preset, projects, onClose, onLaunch }: {
+export function NewSession({ preset, projects, onClose, onLaunch, mobile }: {
   preset: { cwd?: string; agent?: Agent };
   projects: Project[];
   onClose: () => void;
   onLaunch: (b: LaunchBody) => Promise<void>;
+  /** The phone: a bottom sheet with bigger targets and folder shortcuts, and no autofocus (the keyboard would cover it). */
+  mobile?: boolean;
 }) {
   const [agent, setAgent] = useState<Agent>(preset.agent || (localStorage.getItem('ms.lastAgent') as Agent) || 'claude');
   const [cwd, setCwd] = useState(preset.cwd || projects[0]?.cwd || '');
@@ -19,7 +21,7 @@ export function NewSession({ preset, projects, onClose, onLaunch }: {
   const cwdRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { api.projectDirs().then((r) => setDirs(r.dirs)).catch(() => {}); }, []);
-  useEffect(() => { (preset.cwd ? document.getElementById('ms-prompt') : cwdRef.current)?.focus(); }, [preset.cwd]);
+  useEffect(() => { if (!mobile) (preset.cwd ? document.getElementById('ms-prompt') : cwdRef.current)?.focus(); }, [preset.cwd, mobile]);
 
   // Check the typed folder as it changes, so a new one is announced before launch rather than created by a typo.
   const typed = cwd.trim();
@@ -35,6 +37,8 @@ export function NewSession({ preset, projects, onClose, onLaunch }: {
   const displayPath = (p: string) => p.replace(/^\/Users\/[^/]+/, '~');
 
   const known = Array.from(new Set([...projects.map((p) => p.cwd), ...dirs])).sort();
+  // iOS hides datalist suggestions in the keyboard bar, so the phone gets the recent project folders as chips.
+  const recent = mobile ? Array.from(new Set(projects.map((p) => p.cwd))).slice(0, 12) : [];
 
   const submit = async () => {
     if (!typed) { setErr('Choose a folder to work in.'); return; }
@@ -49,7 +53,7 @@ export function NewSession({ preset, projects, onClose, onLaunch }: {
   };
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className={`modal-backdrop ${mobile ? 'm-modal' : ''}`} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <form className="modal" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <h2>New session</h2>
         <div className="field">
@@ -63,6 +67,13 @@ export function NewSession({ preset, projects, onClose, onLaunch }: {
           <span className="label">Folder</span>
           <input ref={cwdRef} list="ms-dirs" value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="~/projects/…" spellCheck={false} />
           <datalist id="ms-dirs">{known.map((d) => <option key={d} value={d} />)}</datalist>
+          {recent.length > 0 && (
+            <div className="m-dirs">
+              {recent.map((d) => (
+                <button key={d} type="button" className={d === typed ? 'on' : ''} title={displayPath(d)} onClick={() => setCwd(d)}>{d.split('/').pop() || d}</button>
+              ))}
+            </div>
+          )}
           {creating && <span className="field-note new">New folder. Tower creates <b>{folder!.path.split('/').pop()}</b> in {displayPath(folder!.parent)}.</span>}
           {folder && !folder.exists && !folder.parentExists && <span className="field-note warn">{displayPath(folder.parent)} does not exist either. Tower creates one new folder at a time.</span>}
           {folder && folder.exists && !folder.isDir && <span className="field-note warn">That is a file, not a folder.</span>}
@@ -74,12 +85,12 @@ export function NewSession({ preset, projects, onClose, onLaunch }: {
         </label>
         <label className="check">
           <input type="checkbox" checked={skip} onChange={(e) => setSkip(e.target.checked)} />
-          Skip permission prompts <span className="muted">({agent === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox'})</span>
+          Skip permission prompts {!mobile && <span className="muted">({agent === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox'})</span>}
         </label>
         {err && <div className="notice error">{err}</div>}
         <div className="modal-actions">
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Starting…' : creating ? 'Create folder & start' : 'Start session'} <kbd>⌘⏎</kbd></button>
+          <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Starting…' : creating ? 'Create folder & start' : 'Start session'}{!mobile && <kbd>⌘⏎</kbd>}</button>
         </div>
       </form>
     </div>
