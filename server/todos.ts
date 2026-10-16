@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { APP_DIR } from './config.js';
 import { shellEnv } from './shell.js';
 import { loadSettings } from './settings.js';
 import { userText, isRealPrompt } from './claude.js';
 import { launchNew } from './sessions.js';
-import type { Session, Todo, TodoScan, TodoStatus, WorkspaceSummary } from '../shared/types.js';
+import type { Session, Todo, TodoScan, TodoStatus, TodoWorktree, WorkspaceSummary } from '../shared/types.js';
 
 /**
  * The todo finder. For each workspace that has it on, it reads the turns its Claude sessions added since
@@ -56,37 +57,178 @@ export function todoState(): { todos: Todo[]; todoScans: TodoScan[] } {
   return { todos: store.todos, todoScans: [...scans.values()] };
 }
 
-export function setTodoStatus(id: string, status: TodoStatus): Todo {
+/** "Not yet" on a finish report: keep the todo open until the session reports again. */
+export function dismissFinish(id: string): Todo {
   const t = store.todos.find((x) => x.id === id);
   if (!t) throw new Error('Unknown todo');
-  t.status = status;
-  t.decidedAt = Date.now();
+  if (t.finished) t.finished.dismissed = true;
   save();
   onChange();
   return t;
 }
 
+export function setTodoStatus(id: string, status: TodoStatus): Todo {
+  const t = store.todos.find((x) => x.id === id);
+  if (!t) throw new Error('Unknown todo');
+  t.status = status;
+  t.decidedAt = Date.now();
+  if (status === 'done' || status === 'rejected') lastWorktreeTick = 0; // clean up its worktree soon
+  save();
+  onChange();
+  return t;
+}
+
+const execFileP = promisify(execFile);
+/** Where startTodo puts the git worktrees of started sessions: outside the repo, so it never sees them. */
+const WORKTREES = path.join(APP_DIR, 'worktrees');
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileP('git', ['-C', cwd, ...args], { env: shellEnv(), timeout: 60_000, encoding: 'utf8' });
+  return stdout.trim();
+}
+
 /**
- * Start a Claude session in the todo's folder with the todo as its first prompt, and link the two.
- * Starting a proposal also accepts it.
+ * A git worktree of the todo's repository on a new branch from the current HEAD, so sessions started from
+ * todos never commit into the same checkout at the same time. Returns the folder to start in (the todo's
+ * folder at the same place inside the worktree), or null when the folder is not in a git repository.
+ * Starting the same todo again reuses its worktree, with the work done so far.
+ */
+async function todoWorktree(t: Todo): Promise<{ cwd: string; path: string; branch: string; base: string } | null> {
+  let top: string, prefix: string;
+  try {
+    top = await git(t.cwd, ['rev-parse', '--show-toplevel']);
+    prefix = await git(t.cwd, ['rev-parse', '--show-prefix']);
+  } catch { return null; }
+  // The todo's folder may be untracked, and then it is not in the worktree.
+  const inside = (dir: string) => (fs.existsSync(path.join(dir, prefix)) ? path.resolve(dir, prefix) : dir);
+  const old = t.startedIn?.worktree;
+  if (old && !old.removedAt && fs.existsSync(old.path)) return { cwd: inside(old.path), path: old.path, branch: old.branch, base: old.base };
+  const short = t.id.slice(0, 8);
+  const slug = t.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+  const branch = `todo/${slug || 'task'}-${short}`;
+  const dir = path.join(WORKTREES, `${path.basename(top)}-${short}`);
+  const base = (await git(top, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')) || (await git(top, ['rev-parse', '--short', 'HEAD']));
+  fs.mkdirSync(WORKTREES, { recursive: true });
+  // The branch outlives its worktree when someone removed only the folder: check it out again.
+  const kept = await git(top, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false);
+  if (kept) await git(top, ['worktree', 'prune']);
+  await git(top, kept ? ['worktree', 'add', dir, branch] : ['worktree', 'add', '-b', branch, dir, 'HEAD']);
+  return { cwd: inside(dir), path: dir, branch, base };
+}
+
+/**
+ * Start a Claude session for the todo with the todo as its first prompt, and link the two. In a git
+ * repository the session gets its own worktree (see todoWorktree). Starting a proposal also accepts it.
  */
 export async function startTodo(id: string, sessions: Session[], skipPermissions?: boolean): Promise<{ tmux: string; key?: string }> {
   const t = store.todos.find((x) => x.id === id);
   if (!t) throw new Error('Unknown todo');
   const from = sessions.find((s) => s.key === t.session);
+  const wt = await todoWorktree(t);
   const prompt = [
     t.title,
     t.detail,
     `This task comes from Tower's todo list. Tower found it in an earlier Claude session in this folder ("${t.sessionTitle}").`,
     `The earlier session said: "${t.quote}"`,
     from?.transcriptPath ? `The earlier session's transcript is ${from.transcriptPath}. Read it only if you need more context.` : '',
+    wt ? `You work in your own git worktree at ${wt.path}, on the branch ${wt.branch}, which Tower made from ${wt.base} so that parallel sessions cannot collide. Commit your work on this branch. Do not merge it into ${wt.base} and do not change the main checkout in ${t.cwd}. Uncommitted changes in the main checkout are not in this worktree. If the project needs installed dependencies (for example node_modules), install them in the worktree first. In your final message, give the branch name so the user can merge it.` : '',
+    `When the task is completely done, end your final message with a line that says only ${FINISH_LINE}. Tower then proposes to mark the todo done. Do not write that line while work is left or while you wait for an answer.`,
   ].filter(Boolean).join('\n\n');
-  const r = await launchNew({ agent: 'claude', cwd: t.cwd, prompt, skipPermissions });
-  t.startedIn = { key: r.key ?? '', tmux: r.tmux, at: Date.now() };
+  const r = await launchNew({ agent: 'claude', cwd: wt?.cwd ?? t.cwd, prompt, skipPermissions });
+  t.startedIn = { key: r.key ?? '', tmux: r.tmux, at: Date.now(), worktree: wt ? { path: wt.path, branch: wt.branch, base: wt.base } : undefined };
   if (t.status === 'proposed' || t.status === 'rejected') { t.status = 'accepted'; t.decidedAt = Date.now(); }
   save();
   onChange();
   return r;
+}
+
+/** How often todoWorktreeTick looks at the worktrees: a few git commands per worktree. */
+const WORKTREE_EVERY_MS = 2 * 60_000;
+let lastWorktreeTick = 0;
+let worktreeBusy = false;
+
+/** The main checkout the worktree belongs to: git commands about the branch run there. */
+const repoOf = (t: Todo) => t.cwd;
+
+/** True when a live session runs inside the worktree, so its folder must stay. */
+function inUse(wt: TodoWorktree, sessions: Session[]): boolean {
+  return sessions.some((s) => s.live && s.status !== 'ended' && (s.cwd === wt.path || s.cwd.startsWith(wt.path + path.sep)));
+}
+
+/**
+ * Uncommitted files in the worktree, and the commits on its branch whose change is not in the base.
+ * `git cherry` compares patches, so a branch that was rebased or cherry-picked into the base counts as merged.
+ */
+async function checkWorktree(t: Todo, wt: TodoWorktree): Promise<NonNullable<TodoWorktree['check']>> {
+  const dirty = (await git(wt.path, ['status', '--porcelain'])).split('\n').filter(Boolean).length;
+  const ahead = await git(repoOf(t), ['cherry', wt.base, wt.branch])
+    .then((out) => out.split('\n').filter((l) => l.startsWith('+')).length, () => undefined);
+  return { dirty, ahead };
+}
+
+/**
+ * Remove the todo's worktree and delete its branch. Without `force` it refuses while the worktree has
+ * uncommitted files or the branch has work that is not in the base. It always refuses while a session runs in it.
+ */
+export async function removeTodoWorktree(id: string, sessions: Session[], force = false): Promise<Todo> {
+  const t = store.todos.find((x) => x.id === id);
+  if (!t) throw new Error('Unknown todo');
+  const wt = t.startedIn?.worktree;
+  if (!wt || wt.removedAt) throw new Error('The todo has no worktree');
+  if (inUse(wt, sessions)) throw new Error('A session still runs in the worktree. Close it first.');
+  if (fs.existsSync(wt.path)) {
+    const c = wt.check = await checkWorktree(t, wt);
+    if (!force) {
+      if (c.dirty) throw new Error(`The worktree has ${c.dirty} uncommitted ${c.dirty === 1 ? 'file' : 'files'}.`);
+      if (c.ahead === undefined) throw new Error(`Tower cannot compare ${wt.branch} with ${wt.base}.`);
+      if (c.ahead) throw new Error(`${wt.branch} has ${c.ahead} ${c.ahead === 1 ? 'commit' : 'commits'} that ${wt.base} does not have.`);
+    }
+    await git(repoOf(t), ['worktree', 'remove', ...(force ? ['--force'] : []), wt.path]);
+  } else {
+    await git(repoOf(t), ['worktree', 'prune']).catch(() => {});
+  }
+  // -D: checkWorktree already found the work in the base (or the user forced it), also after a rebase that -d misses.
+  await git(repoOf(t), ['branch', '-D', wt.branch]).catch(() => {});
+  wt.removedAt = Date.now();
+  save();
+  onChange();
+  return t;
+}
+
+/**
+ * Called on every snapshot tick. At most every WORKTREE_EVERY_MS it checks each todo worktree, so the
+ * panel can show unmerged work, and it removes the worktree and branch of a done or rejected todo when
+ * nothing would be lost: no uncommitted files, every commit in the base, and no session running in it.
+ */
+export function todoWorktreeTick(sessions: Session[], now = Date.now()): void {
+  if (worktreeBusy || now - lastWorktreeTick < WORKTREE_EVERY_MS) return;
+  const todos = store.todos.filter((t) => t.startedIn?.worktree && !t.startedIn.worktree.removedAt);
+  if (!todos.length) return;
+  lastWorktreeTick = now;
+  worktreeBusy = true;
+  (async () => {
+    let changed = false;
+    for (const t of todos) {
+      const wt = t.startedIn!.worktree!;
+      try {
+        if (!fs.existsSync(wt.path)) {
+          // Someone removed the folder by hand: forget the worktree; keep the branch, it may hold work.
+          await git(repoOf(t), ['worktree', 'prune']).catch(() => {});
+          wt.removedAt = Date.now();
+          changed = true;
+          continue;
+        }
+        const c = await checkWorktree(t, wt);
+        if (JSON.stringify(c) !== JSON.stringify(wt.check)) { wt.check = c; changed = true; }
+        const finished = t.status === 'done' || t.status === 'rejected';
+        if (finished && c.dirty === 0 && c.ahead === 0 && !inUse(wt, sessions)) {
+          await removeTodoWorktree(t.id, sessions);
+          changed = false; // removeTodoWorktree saved and told the clients
+        }
+      } catch { /* try again next round */ }
+    }
+    if (changed) { save(); onChange(); }
+  })().finally(() => { worktreeBusy = false; });
 }
 
 /**
@@ -106,6 +248,57 @@ export function linkTodoSessions(sessions: Session[], renamed: Record<string, st
     const t = byKey.get(s.key) ?? (s.live?.kind === 'tmux' ? byTmux.get(s.live.tmux) : undefined);
     if (t) s.todo = { id: t.id, title: t.title, status: t.status };
   }
+}
+
+/** The line a started session ends its last message with when the todo is done (see startTodo). */
+const FINISH_LINE = '[todo done]';
+const FINISH_TAIL_BYTES = 256 * 1024;
+/** Transcript size at the last finish check, so an unchanged transcript is not read again. */
+const finishChecked = new Map<string, number>();
+
+/**
+ * Propose `done` for an open todo when the session started for it ends a turn with FINISH_LINE.
+ * The report is kept by the uuid of that message: "Not yet" holds until a later message reports again.
+ */
+export function checkTodoFinish(sessions: Session[], renamed: Record<string, string>): void {
+  let changed = false;
+  for (const t of store.todos) {
+    if (t.status !== 'accepted' || !t.startedIn) continue;
+    const tmux = renamed[t.startedIn.tmux] ?? t.startedIn.tmux;
+    const s = sessions.find((x) => x.key === t.startedIn!.key)
+      ?? sessions.find((x) => x.live?.kind === 'tmux' && x.live.tmux === tmux);
+    if (!s?.transcriptPath || s.status === 'working') continue;
+    let size: number;
+    try { size = fs.statSync(s.transcriptPath).size; } catch { continue; }
+    if (finishChecked.get(s.transcriptPath) === size) continue;
+    finishChecked.set(s.transcriptPath, size);
+    const last = lastReply(s.transcriptPath, size);
+    if (!last || last.uuid === t.finished?.uuid) continue;
+    const lines = last.text.trimEnd().split('\n');
+    if (lines.pop()!.replace(/[\s`*_>.]+/g, '').toLowerCase() !== FINISH_LINE.replace(/\s/g, '')) continue;
+    t.finished = { at: Date.now(), uuid: last.uuid, text: clip(lines.join('\n').trim(), 600) };
+    changed = true;
+  }
+  if (changed) { save(); onChange(); }
+}
+
+/** The text of the main thread's last assistant message that has text. */
+function lastReply(file: string, size: number): { uuid: string; text: string } | null {
+  const start = Math.max(0, size - FINISH_TAIL_BYTES);
+  const buf = Buffer.alloc(size - start);
+  const fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, buf, 0, buf.length, start); } finally { fs.closeSync(fd); }
+  const lines = buf.toString('utf8').split('\n');
+  if (start > 0) lines.shift();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i]) continue;
+    let r: any;
+    try { r = JSON.parse(lines[i]); } catch { continue; }
+    if (r.isSidechain || r.type !== 'assistant' || !Array.isArray(r.message?.content)) continue;
+    const text = r.message.content.filter((b: any) => b.type === 'text' && b.text?.trim()).map((b: any) => b.text).join('\n');
+    if (text) return { uuid: String(r.uuid ?? i), text };
+  }
+  return null;
 }
 
 /** Called on every snapshot tick; starts a scan of each enabled workspace at most every SCAN_EVERY_MS. */

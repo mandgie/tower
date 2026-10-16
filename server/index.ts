@@ -14,7 +14,7 @@ import { saveUpload, isUpload, uploadFile } from './uploads.js';
 import { applyDone, setViewing } from './seen.js';
 import { loadWorkspaces, saveWorkspaces, workspaceOps, addWorkspaceOp, clearWorkspaceOp } from './workspaces.js';
 import { runDoctor, doctorSummary } from './doctor.js';
-import { todoState, todoTick, scanWorkspace, setTodoStatus, startTodo, linkTodoSessions, onTodosChange } from './todos.js';
+import { todoState, todoTick, scanWorkspace, setTodoStatus, startTodo, removeTodoWorktree, todoWorktreeTick, linkTodoSessions, checkTodoFinish, dismissFinish, onTodosChange } from './todos.js';
 import { applyRemote, remoteInfo, rotateToken, isPaired, isLoopback, peerAllowed, originMatchesHost, handlePair, unpairedPage } from './remote.js';
 import type { Snapshot, SnapshotDelta } from '../shared/types.js';
 
@@ -51,7 +51,9 @@ async function refresh(): Promise<Snapshot> {
     next.workspaceOps = workspaceOps();
     Object.assign(next, todoState());
     linkTodoSessions(next.sessions, next.renamed);
+    checkTodoFinish(next.sessions, next.renamed);
     todoTick(next.workspaces, next.sessions);
+    todoWorktreeTick(next.sessions);
     const delta: SnapshotDelta = { generatedAt: next.generatedAt, upsert: [], remove: [] };
     const sessions = new Map<string, string>();
     for (const s of next.sessions) {
@@ -154,9 +156,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       setTimeout(refresh, 300);
       return json(res, 200, r);
     }
+    const rmWt = p.match(/^\/api\/todos\/([^/]+)\/worktree$/);
+    if (m === 'DELETE' && rmWt) {
+      // Remove the todo's worktree and branch; ?force=1 also when work would be lost.
+      try { return json(res, 200, await removeTodoWorktree(decodeURIComponent(rmWt[1]), snapshot.sessions, url.searchParams.get('force') === '1')); }
+      catch (e) { return json(res, 409, { error: (e as Error).message }); }
+    }
     const todo = p.match(/^\/api\/todos\/([^/]+)$/);
     if (m === 'POST' && todo) {
       const b = await readBody(req);
+      if (b.dismissFinish) {
+        try { return json(res, 200, dismissFinish(decodeURIComponent(todo[1]))); } catch (e) { return json(res, 404, { error: (e as Error).message }); }
+      }
       if (!['proposed', 'accepted', 'done', 'rejected'].includes(b.status)) return json(res, 400, { error: 'Bad status' });
       try { return json(res, 200, setTodoStatus(decodeURIComponent(todo[1]), b.status)); } catch (e) { return json(res, 404, { error: (e as Error).message }); }
     }

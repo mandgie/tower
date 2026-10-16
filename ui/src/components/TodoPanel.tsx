@@ -35,6 +35,35 @@ export function TodoPanel({ workspace, todos, scan, byKey, byTmux, focus, onTogg
     return () => cancelAnimationFrame(r);
   }, [focus?.at]); // eslint-disable-line react-hooks/exhaustive-deps
   const [err, setErr] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  /** Remove a finished todo's worktree and branch. Work that is not in the base needs a yes first. */
+  const removeWorktree = async (t: Todo) => {
+    const wt = t.startedIn!.worktree!;
+    const lost = [
+      wt.check?.dirty ? `${wt.check.dirty} uncommitted ${wt.check.dirty === 1 ? 'file' : 'files'}` : '',
+      wt.check?.ahead ? `${wt.check.ahead} ${wt.check.ahead === 1 ? 'commit' : 'commits'} that ${wt.base} does not have` : '',
+      wt.check && wt.check.ahead === undefined ? `commits Tower cannot compare with ${wt.base}` : '',
+    ].filter(Boolean);
+    const force = lost.length > 0;
+    if (force && !confirm(`${wt.branch} has ${lost.join(' and ')}.\n\nRemove the worktree and delete the branch anyway? That work is lost.`)) return;
+    setRemoving(t.id);
+    try { await api.removeWorktree(t.id, force); } catch (e) { setErr((e as Error).message); } finally { setRemoving(null); }
+  };
+  /** The todo's branch and what is in it, from the last worktree check (server/todos.ts todoWorktreeTick). */
+  const branch = (t: Todo) => {
+    const wt = t.startedIn?.worktree;
+    if (!wt || wt.removedAt) return null;
+    const c = wt.check;
+    const state = !c ? '' : [
+      c.dirty ? `${c.dirty} uncommitted ${c.dirty === 1 ? 'file' : 'files'}` : '',
+      c.ahead ? `${c.ahead} ${c.ahead === 1 ? 'commit' : 'commits'} to merge` : c.ahead === 0 ? 'nothing to merge' : '',
+    ].filter(Boolean).join(', ');
+    return (
+      <div className="todo-branch" title={`Worktree: ${wt.path}\nMade from ${wt.base}`}>
+        Branch <code>{wt.branch}</code>{state && <span className={c?.dirty || c?.ahead ? 'todo-branch-open' : ''}> · {state}</span>}
+      </div>
+    );
+  };
   const set = (t: Todo, status: TodoStatus) => api.setTodo(t.id, status).catch((e) => setErr((e as Error).message));
   const proposed = todos.filter((t) => t.status === 'proposed').sort((a, b) => b.createdAt - a.createdAt);
   const accepted = todos.filter((t) => t.status === 'accepted').sort((a, b) => (a.decidedAt ?? 0) - (b.decidedAt ?? 0));
@@ -109,6 +138,17 @@ export function TodoPanel({ workspace, todos, scan, byKey, byTmux, focus, onTogg
                     <div className="todo-title">{t.title}</div>
                     {t.detail && <div className="todo-detail">{t.detail}</div>}
                     <div className="todo-foot">{source(t)}</div>
+                    {branch(t)}
+                    {t.finished && !t.finished.dismissed && (
+                      <div className="todo-finished">
+                        <div className="todo-finished-head">The session reports that it is done <span className="todo-age">{relTime(t.finished.at)}</span></div>
+                        {t.finished.text && <div className="todo-finished-text">{t.finished.text}</div>}
+                        <div className="todo-actions">
+                          <button className="btn small primary" onClick={() => set(t, 'done')}>Mark done</button>
+                          <button className="btn small ghost" onClick={() => api.dismissFinish(t.id).catch((e) => setErr((e as Error).message))}>Not yet</button>
+                        </div>
+                      </div>
+                    )}
                     {(() => {
                       const r = runner(t);
                       if (r && r.live && r.status !== 'ended') return (
@@ -118,7 +158,7 @@ export function TodoPanel({ workspace, todos, scan, byKey, byTmux, focus, onTogg
                       );
                       return (
                         <button className="btn small todo-start" disabled={starting === t.id} onClick={() => start(t)}
-                          title="Start a Claude session in this folder with the todo as its first prompt">
+                          title="Start a Claude session with the todo as its first prompt, in its own git worktree when the folder is a git repository">
                           {starting === t.id ? 'Starting…' : t.startedIn ? 'Start again' : '▶ Start session'}
                         </button>
                       );
@@ -136,7 +176,16 @@ export function TodoPanel({ workspace, todos, scan, byKey, byTmux, focus, onTogg
               {showOld && old.map((t) => (
                 <div key={t.id} data-todo={t.id} className={`todo-row old ${t.status}`}>
                   <span className={`todo-check ${t.status === 'done' ? 'on' : 'off'}`} />
-                  <div className="todo-row-main"><div className="todo-title">{t.title}</div></div>
+                  <div className="todo-row-main">
+                    <div className="todo-title">{t.title}</div>
+                    {branch(t)}
+                    {branch(t) && (
+                      <button className="btn small ghost todo-start" disabled={removing === t.id} onClick={() => removeWorktree(t)}
+                        title="Remove the git worktree and delete its branch. Tower does this by itself once the branch is merged and the worktree has no uncommitted files.">
+                        {removing === t.id ? 'Removing…' : 'Remove worktree'}
+                      </button>
+                    )}
+                  </div>
                   <button className="btn ghost small" onClick={() => set(t, t.status === 'done' ? 'accepted' : 'proposed')}>Undo</button>
                 </div>
               ))}

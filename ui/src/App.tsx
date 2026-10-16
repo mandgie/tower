@@ -94,7 +94,9 @@ export function App() {
     const m = new Map<string, { proposed: number; open: number }>();
     for (const t of todos) {
       const c = m.get(t.workspace) ?? { proposed: 0, open: 0 };
-      if (t.status === 'proposed') c.proposed++; else if (t.status === 'accepted') c.open++;
+      // A finish report waits for the user like a proposal does.
+      if (t.status === 'proposed' || (t.status === 'accepted' && t.finished && !t.finished.dismissed)) c.proposed++;
+      else if (t.status === 'accepted') c.open++;
       m.set(t.workspace, c);
     }
     return m;

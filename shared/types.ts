@@ -132,7 +132,20 @@ export interface Todo {
   createdAt: number;
   status: TodoStatus;
   decidedAt?: number;
-  startedIn?: { key: string; tmux: string; at: number };  // the session started to do this todo
+  startedIn?: {  // the session started to do this todo
+    key: string; tmux: string; at: number;
+    worktree?: TodoWorktree;  // its own git worktree (server/todos.ts)
+  };
+  /** The started session ended a turn with the finish line (server/todos.ts): Tower proposes `done`. */
+  finished?: { at: number; uuid: string; text: string; dismissed?: boolean };
+}
+
+/** The git worktree startTodo made for a todo's session, and what the cleanup in server/todos.ts last saw in it. */
+export interface TodoWorktree {
+  path: string; branch: string; base: string;
+  /** Uncommitted files, and commits on the branch whose change is not in the base (undefined: git could not tell). */
+  check?: { dirty: number; ahead?: number };
+  removedAt?: number;  // Tower removed the worktree and its branch, or someone removed the folder by hand
 }
 
 /** The finder's state for one workspace. */
