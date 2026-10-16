@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { APP_DIR } from './config.js';
 import { shellEnv } from './shell.js';
 import { loadSettings } from './settings.js';
@@ -56,6 +57,16 @@ export function todoState(): { todos: Todo[]; todoScans: TodoScan[] } {
   return { todos: store.todos, todoScans: [...scans.values()] };
 }
 
+/** "Not yet" on a finish report: keep the todo open until the session reports again. */
+export function dismissFinish(id: string): Todo {
+  const t = store.todos.find((x) => x.id === id);
+  if (!t) throw new Error('Unknown todo');
+  if (t.finished) t.finished.dismissed = true;
+  save();
+  onChange();
+  return t;
+}
+
 export function setTodoStatus(id: string, status: TodoStatus): Todo {
   const t = store.todos.find((x) => x.id === id);
   if (!t) throw new Error('Unknown todo');
@@ -66,27 +77,135 @@ export function setTodoStatus(id: string, status: TodoStatus): Todo {
   return t;
 }
 
+const execFileP = promisify(execFile);
+/** Where startTodo puts the git worktrees of started sessions: outside the repo, so it never sees them. */
+const WORKTREES = path.join(APP_DIR, 'worktrees');
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileP('git', ['-C', cwd, ...args], { env: shellEnv(), timeout: 60_000, encoding: 'utf8' });
+  return stdout.trim();
+}
+
 /**
- * Start a Claude session in the todo's folder with the todo as its first prompt, and link the two.
- * Starting a proposal also accepts it.
+ * A git worktree of the todo's repository on a new branch from the current HEAD, so sessions started from
+ * todos never commit into the same checkout at the same time. Returns the folder to start in (the todo's
+ * folder at the same place inside the worktree), or null when the folder is not in a git repository.
+ * Starting the same todo again reuses its worktree, with the work done so far.
+ */
+async function todoWorktree(t: Todo): Promise<{ cwd: string; path: string; branch: string; base: string } | null> {
+  let top: string, prefix: string;
+  try {
+    top = await git(t.cwd, ['rev-parse', '--show-toplevel']);
+    prefix = await git(t.cwd, ['rev-parse', '--show-prefix']);
+  } catch { return null; }
+  // The todo's folder may be untracked, and then it is not in the worktree.
+  const inside = (dir: string) => (fs.existsSync(path.join(dir, prefix)) ? path.resolve(dir, prefix) : dir);
+  const old = t.startedIn?.worktree;
+  if (old && fs.existsSync(old.path)) return { cwd: inside(old.path), ...old };
+  const short = t.id.slice(0, 8);
+  const slug = t.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+  const branch = `todo/${slug || 'task'}-${short}`;
+  const dir = path.join(WORKTREES, `${path.basename(top)}-${short}`);
+  const base = (await git(top, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')) || (await git(top, ['rev-parse', '--short', 'HEAD']));
+  fs.mkdirSync(WORKTREES, { recursive: true });
+  await git(top, ['worktree', 'add', '-b', branch, dir, 'HEAD']);
+  return { cwd: inside(dir), path: dir, branch, base };
+}
+
+/**
+ * Start a Claude session for the todo with the todo as its first prompt, and link the two. In a git
+ * repository the session gets its own worktree (see todoWorktree). Starting a proposal also accepts it.
  */
 export async function startTodo(id: string, sessions: Session[], skipPermissions?: boolean): Promise<{ tmux: string; key?: string }> {
   const t = store.todos.find((x) => x.id === id);
   if (!t) throw new Error('Unknown todo');
   const from = sessions.find((s) => s.key === t.session);
+  const wt = await todoWorktree(t);
   const prompt = [
     t.title,
     t.detail,
     `This task comes from Tower's todo list. Tower found it in an earlier Claude session in this folder ("${t.sessionTitle}").`,
     `The earlier session said: "${t.quote}"`,
     from?.transcriptPath ? `The earlier session's transcript is ${from.transcriptPath}. Read it only if you need more context.` : '',
+    wt ? `You work in your own git worktree at ${wt.path}, on the branch ${wt.branch}, which Tower made from ${wt.base} so that parallel sessions cannot collide. Commit your work on this branch. Do not merge it into ${wt.base} and do not change the main checkout in ${t.cwd}. Uncommitted changes in the main checkout are not in this worktree. If the project needs installed dependencies (for example node_modules), install them in the worktree first. In your final message, give the branch name so the user can merge it.` : '',
+    `When the task is completely done, end your final message with a line that says only ${FINISH_LINE}. Tower then proposes to mark the todo done. Do not write that line while work is left or while you wait for an answer.`,
   ].filter(Boolean).join('\n\n');
-  const r = await launchNew({ agent: 'claude', cwd: t.cwd, prompt, skipPermissions });
-  t.startedIn = { key: r.key ?? '', tmux: r.tmux, at: Date.now() };
+  const r = await launchNew({ agent: 'claude', cwd: wt?.cwd ?? t.cwd, prompt, skipPermissions });
+  t.startedIn = { key: r.key ?? '', tmux: r.tmux, at: Date.now(), worktree: wt ? { path: wt.path, branch: wt.branch, base: wt.base } : undefined };
   if (t.status === 'proposed' || t.status === 'rejected') { t.status = 'accepted'; t.decidedAt = Date.now(); }
   save();
   onChange();
   return r;
+}
+
+/**
+ * Mark each session that a todo started. The key is known at launch; after /clear the session gets a new
+ * key, but its pane keeps following the tmux renames, so match the pane name too.
+ */
+export function linkTodoSessions(sessions: Session[], renamed: Record<string, string>): void {
+  const byKey = new Map<string, Todo>();
+  const byTmux = new Map<string, Todo>();
+  for (const t of store.todos) {
+    if (!t.startedIn) continue;
+    if (t.startedIn.key) byKey.set(t.startedIn.key, t);
+    byTmux.set(renamed[t.startedIn.tmux] ?? t.startedIn.tmux, t);
+  }
+  if (!byKey.size && !byTmux.size) return;
+  for (const s of sessions) {
+    const t = byKey.get(s.key) ?? (s.live?.kind === 'tmux' ? byTmux.get(s.live.tmux) : undefined);
+    if (t) s.todo = { id: t.id, title: t.title, status: t.status };
+  }
+}
+
+/** The line a started session ends its last message with when the todo is done (see startTodo). */
+const FINISH_LINE = '[todo done]';
+const FINISH_TAIL_BYTES = 256 * 1024;
+/** Transcript size at the last finish check, so an unchanged transcript is not read again. */
+const finishChecked = new Map<string, number>();
+
+/**
+ * Propose `done` for an open todo when the session started for it ends a turn with FINISH_LINE.
+ * The report is kept by the uuid of that message: "Not yet" holds until a later message reports again.
+ */
+export function checkTodoFinish(sessions: Session[], renamed: Record<string, string>): void {
+  let changed = false;
+  for (const t of store.todos) {
+    if (t.status !== 'accepted' || !t.startedIn) continue;
+    const tmux = renamed[t.startedIn.tmux] ?? t.startedIn.tmux;
+    const s = sessions.find((x) => x.key === t.startedIn!.key)
+      ?? sessions.find((x) => x.live?.kind === 'tmux' && x.live.tmux === tmux);
+    if (!s?.transcriptPath || s.status === 'working') continue;
+    let size: number;
+    try { size = fs.statSync(s.transcriptPath).size; } catch { continue; }
+    if (finishChecked.get(s.transcriptPath) === size) continue;
+    finishChecked.set(s.transcriptPath, size);
+    const last = lastReply(s.transcriptPath, size);
+    if (!last || last.uuid === t.finished?.uuid) continue;
+    const lines = last.text.trimEnd().split('\n');
+    if (lines.pop()!.replace(/[\s`*_>.]+/g, '').toLowerCase() !== FINISH_LINE.replace(/\s/g, '')) continue;
+    t.finished = { at: Date.now(), uuid: last.uuid, text: clip(lines.join('\n').trim(), 600) };
+    changed = true;
+  }
+  if (changed) { save(); onChange(); }
+}
+
+/** The text of the main thread's last assistant message that has text. */
+function lastReply(file: string, size: number): { uuid: string; text: string } | null {
+  const start = Math.max(0, size - FINISH_TAIL_BYTES);
+  const buf = Buffer.alloc(size - start);
+  const fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, buf, 0, buf.length, start); } finally { fs.closeSync(fd); }
+  const lines = buf.toString('utf8').split('\n');
+  if (start > 0) lines.shift();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i]) continue;
+    let r: any;
+    try { r = JSON.parse(lines[i]); } catch { continue; }
+    if (r.isSidechain || r.type !== 'assistant' || !Array.isArray(r.message?.content)) continue;
+    const text = r.message.content.filter((b: any) => b.type === 'text' && b.text?.trim()).map((b: any) => b.text).join('\n');
+    if (text) return { uuid: String(r.uuid ?? i), text };
+  }
+  return null;
 }
 
 /** Called on every snapshot tick; starts a scan of each enabled workspace at most every SCAN_EVERY_MS. */

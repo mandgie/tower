@@ -43,6 +43,7 @@ export const api = {
   remote: () => j<RemoteInfo>('/api/remote'),
   rotateRemote: () => j<RemoteInfo>('/api/remote/rotate', { method: 'POST' }),
   setTodo: (id: string, status: TodoStatus) => j<Todo>(`/api/todos/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ status }) }),
+  dismissFinish: (id: string) => j<Todo>(`/api/todos/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ dismissFinish: true }) }),
   startTodo: (id: string, skipPermissions?: boolean) => j<{ tmux: string; key?: string }>(`/api/todos/${encodeURIComponent(id)}/start`, { method: 'POST', body: JSON.stringify({ skipPermissions }) }),
   scanTodos: (workspace: string) => j<{ ok: true }>('/api/todos/scan', { method: 'POST', body: JSON.stringify({ workspace }) }),
 };

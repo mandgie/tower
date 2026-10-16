@@ -95,6 +95,7 @@ const Row = memo(function Row({ s, now, selected, onSelect, showProject }: { s: 
           {showProject && <span className="row-project">{s.project}</span>}
           {s.gitBranch && s.gitBranch !== 'HEAD' && <span className="branch">{s.gitBranch}</span>}
           {s.importedFrom && <span className="imported">imported</span>}
+          {s.todo && <span className={`todo-tag ${s.todo.status}`} title={`Started from the todo: ${s.todo.title}`}>{s.todo.status === 'done' ? 'todo ✓' : 'todo'}</span>}
         </span>
       </span>
       <span className="row-side">
