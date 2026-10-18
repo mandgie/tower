@@ -29,7 +29,7 @@ const FIRST_TAIL_BYTES = 512 * 1024;
 const MAX_READ_BYTES = 4 * 1024 * 1024;
 /** What one scan sends the model: the newest part of the turns wins when they are longer. */
 const MAX_CHARS = 80_000;
-const MAX_TODOS_PER_SESSION = 6;
+const MAX_TODOS_PER_SESSION = 2;
 /**
  * A new todo stays hidden (`held`) until its session has been idle this long and every turn after it was
  * read, so work that the same chat picks up a few turns later never reaches the list.
