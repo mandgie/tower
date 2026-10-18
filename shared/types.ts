@@ -146,6 +146,8 @@ export interface Todo {
    * itself, with `from` kept for Undo; an accepted todo shows the finding and waits for the user.
    */
   closed?: { at: number; by: 'session' | 'git'; reason: string; quote?: string; from: TodoStatus; dismissed?: boolean };
+  /** Found, but hidden until its session moves on (server/todos.ts releaseHeld). The UI never gets a held todo. */
+  held?: { file: string };
 }
 
 /** The git worktree startTodo made for a todo's session, and what the cleanup in server/todos.ts last saw in it. */

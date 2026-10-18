@@ -30,6 +30,13 @@ const MAX_READ_BYTES = 4 * 1024 * 1024;
 /** What one scan sends the model: the newest part of the turns wins when they are longer. */
 const MAX_CHARS = 80_000;
 const MAX_TODOS_PER_SESSION = 6;
+/**
+ * A new todo stays hidden (`held`) until its session has been idle this long and every turn after it was
+ * read, so work that the same chat picks up a few turns later never reaches the list.
+ */
+const HOLD_MS = 60 * 60_000;
+/** Show a held todo after this long anyway, also when its session is never read again. */
+const MAX_HOLD_MS = 24 * 3600_000;
 const RUN_TIMEOUT_MS = 4 * 60_000;
 
 interface Store { todos: Todo[]; marks: Record<string, number> }
@@ -54,7 +61,7 @@ function save(): void {
 export function onTodosChange(fn: () => void): void { onChange = fn; }
 
 export function todoState(): { todos: Todo[]; todoScans: TodoScan[] } {
-  return { todos: store.todos, todoScans: [...scans.values()] };
+  return { todos: store.todos.filter((t) => !t.held), todoScans: [...scans.values()] };
 }
 
 /** "Not yet" on a finish report: keep the todo open until the session reports again. */
@@ -319,9 +326,32 @@ function lastReply(file: string, size: number): { uuid: string; text: string } |
 export function todoTick(workspaces: WorkspaceSummary[], sessions: Session[], now = Date.now()): void {
   if (now - lastTick < SCAN_EVERY_MS) return;
   lastTick = now;
+  releaseHeld(sessions, now);
   for (const w of workspaces) if (w.todos) scanWorkspace(w, sessions, false);
   const on = new Set(workspaces.filter((w) => w.todos).map((w) => w.id));
   queue = queue.then(() => checkCommits(store.todos.filter((t) => on.has(t.workspace)))).catch(() => {});
+}
+
+/**
+ * Show the held todos whose session has moved on: every turn in its transcript was read (so a later turn
+ * that does the work had its chance to drop the todo), and the session has been idle for HOLD_MS or ended.
+ */
+function releaseHeld(sessions: Session[], now: number): void {
+  let changed = false;
+  for (const t of store.todos) {
+    if (!t.held) continue;
+    const file = t.held.file;
+    const s = sessions.find((x) => x.key === t.session) ?? sessions.find((x) => x.transcriptPath === file);
+    let size = 0;
+    try { size = fs.statSync(file).size; } catch { /* gone: nothing more to read */ }
+    const read = (store.marks[file] ?? 0) >= size;
+    const idle = !s?.live || s.status === 'ended' || now - s.updatedAt >= HOLD_MS;
+    if ((read && idle) || now - t.createdAt >= MAX_HOLD_MS) {
+      delete t.held;
+      changed = true;
+    }
+  }
+  if (changed) { save(); onChange(); }
 }
 
 /**
@@ -421,7 +451,8 @@ async function scanSession(workspace: string, s: Session): Promise<void> {
       const t = open[c.n - 1];
       const q = normalize(c.quote).slice(0, 60);
       if (!t || !c.reason.trim() || !q || !(haystack.includes(q) || commitHay.includes(q))) continue;
-      closeTodo(t, 'session', c.reason, c.quote);
+      if (t.held) store.todos.splice(store.todos.indexOf(t), 1);
+      else closeTodo(t, 'session', c.reason, c.quote);
     }
     for (const f of found.todos.slice(0, MAX_TODOS_PER_SESSION)) {
       // The quote is the proof; a todo whose quote is not in the turns is the model's invention.
@@ -429,6 +460,7 @@ async function scanSession(workspace: string, s: Session): Promise<void> {
       store.todos.push({
         id: randomUUID(), workspace, session: s.key, sessionTitle: s.title || s.firstPrompt.slice(0, 80), cwd: s.cwd,
         title: f.title.trim(), detail: f.detail.trim(), quote: f.quote.trim(), createdAt: Date.now(), status: 'proposed',
+        held: { file },
       });
     }
   }
@@ -515,6 +547,7 @@ Then check the open todos (T1, T2, …). Todos go stale fast: the same conversat
 - the work is done (for example CLAUDE reports that it committed, fixed, ran or removed the thing), or
 - the work is no longer needed (the USER drops it, or the plan changed so it no longer applies).
 A todo that the conversation only mentions, starts, or plans to do is still open. When in doubt, leave it open.
+A todo marked [new] was found in an earlier part of this conversation and the developer has not seen it yet. Also close it when this part of the conversation picks the work up: the USER asks for it ("do it now", "yes, go ahead"), or CLAUDE starts or does it. The conversation handles it, so it is not a todo.
 For each closed todo give:
 - n: its number (3 for T3).
 - reason: one short sentence that says what made it done or not needed.
@@ -560,7 +593,7 @@ async function recentCommits(cwd: string, open: Todo[]): Promise<string> {
 
 async function ask(s: Session, text: string, open: Todo[], past: Todo[], commits: string): Promise<{ todos: Found[]; closed: Closed[] }> {
   const openList = open.length
-    ? open.map((t, i) => `T${i + 1}. ${t.title}${t.detail ? ` (${clip(t.detail, 200)})` : ''}`).join('\n')
+    ? open.map((t, i) => `T${i + 1}.${t.held ? ' [new]' : ''} ${t.title}${t.detail ? ` (${clip(t.detail, 200)})` : ''}`).join('\n')
     : '(none)';
   const pastList = past.length ? past.map((t) => `- [${t.status}] ${t.title}`).join('\n') : '(none)';
   const prompt = `Project folder: ${s.cwd}\nSession: ${s.title || s.firstPrompt}\n\n`
