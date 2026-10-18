@@ -491,15 +491,15 @@ const normalize = (s: string) => s.toLowerCase().replace(/[\s`*_>"'“”‘’]
 
 const SYSTEM = `You read part of a conversation between a developer (USER) and a coding agent (CLAUDE), and you find the work that the conversation leaves open.
 
-A todo is a concrete piece of work that someone still needs to do. Report a todo only when the text shows it:
-- CLAUDE says that it did not do, skipped, could not finish, or only partly finished something.
-- CLAUDE suggests a next step or a follow-up, and the USER did not reject it or ask for it to be done in the same conversation.
-- The USER says that something must happen later ("later", "next", "remember to", "after that").
+A todo is a concrete piece of work that the developer committed to and that is still not done. Report a todo only when the text shows one of these:
+- The USER says that something must happen later ("later", "tomorrow", "remember to", "after that", "we need to").
+- CLAUDE says that it did not do, skipped, could not finish, or only partly finished something that the USER asked for.
 - A test, build, check or command failed, and the conversation does not show a fix.
-- CLAUDE found a bug or a risk outside the task and left it alone.
 
 Do not report:
-- Work that a later part of the conversation finishes.
+- Suggestions, options, offers or ideas from CLAUDE ("Next steps", "I can also …", "You may want to …", "Consider …", "Do you want me to …"), even when they are good and even when the USER did not answer them. Report one only when the USER said to do it later.
+- Risks, bugs or improvements that CLAUDE noticed outside the task, unless the USER said to do something about them later.
+- Work that a later part of the conversation does, asks for, or starts.
 - Vague ideas, general advice, or questions without a concrete action.
 - Anything that matches an open todo or an earlier todo in the lists, even with other words.
 - Anything only about this conversation's own chat (for example "answer the user").
@@ -509,7 +509,7 @@ Write each todo for the developer, who will read it days later without the conve
 - detail: one or two sentences: why it is open and what "done" means.
 - quote: the exact words from the conversation that show the todo is open, copied character for character, 5 to 30 words.
 
-Return at most ${MAX_TODOS_PER_SESSION} todos, the most useful first. Return an empty list when nothing is open; that is the usual answer.
+Return at most ${MAX_TODOS_PER_SESSION} todos, the most important first. Return an empty list when nothing is open; that is the usual answer. A missed todo costs little; a todo the developer did not want costs their attention.
 
 Then check the open todos (T1, T2, …). Todos go stale fast: the same conversation often does the work a few minutes after a todo was found, or a commit does it. Put a todo in "closed" only when the conversation or the recent commits show that:
 - the work is done (for example CLAUDE reports that it committed, fixed, ran or removed the thing), or
