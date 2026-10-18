@@ -83,6 +83,7 @@ export interface Snapshot {
   workspaceOps?: WorkspaceOp[];     // workspace changes made on the phone, waiting for the Mac to apply them
   todos?: Todo[];                   // todos found in the sessions of workspaces that have the todo finder on
   todoScans?: TodoScan[];           // the todo finder's state per workspace
+  lost?: LostSession[];             // sessions the tmux server lost (the Mac shut down), waiting to be resumed
 }
 
 export interface ProjectDir { cwd: string; name: string }
@@ -103,6 +104,7 @@ export interface SnapshotDelta {
   workspaceOps?: WorkspaceOp[];
   todos?: Todo[];
   todoScans?: TodoScan[];
+  lost?: LostSession[];
 }
 
 export type SnapshotEvent = { t: 'full'; snapshot: Snapshot } | ({ t: 'delta' } & SnapshotDelta);
@@ -167,6 +169,19 @@ export interface TodoScan {
  * only says where it belongs: `workspace` when started from that workspace's chip, else the one working
  * in the same folder. The desktop adds the pane and clears the entry.
  */
+/**
+ * A session that was running when its tmux server went away (shutdown, crash, empty battery). Its pane
+ * stays in the workspace and the desktop resumes it. `id` is the conversation to resume, which can differ
+ * from the id in the tmux name after /clear.
+ */
+export interface LostSession {
+  tmux: string;
+  agent: Agent;
+  id: string;
+  cwd: string;
+  at: number;          // when the server noticed
+}
+
 export interface Placement {
   tmux: string;
   cwd: string;

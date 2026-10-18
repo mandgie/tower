@@ -68,20 +68,21 @@ export interface TmuxPane {
   pid: number;
   width: number;
   height: number;
+  serverStart: number; // when this tmux server started, which tells a restarted server from the old one
 }
 
 export async function listPanes(): Promise<TmuxPane[]> {
   const out = await tmuxQuiet(['list-panes', '-a', '-F',
-    '#{session_name}\t#{session_created}\t#{session_activity}\t#{session_attached}\t#{pane_dead}\t#{pane_current_command}\t#{pane_pid}\t#{pane_width}\t#{pane_height}']);
+    '#{session_name}\t#{session_created}\t#{session_activity}\t#{session_attached}\t#{pane_dead}\t#{pane_current_command}\t#{pane_pid}\t#{pane_width}\t#{pane_height}\t#{start_time}']);
   if (!out) return [];
   const panes: TmuxPane[] = [];
   for (const line of out.split('\n')) {
     if (!line.trim()) continue;
-    const [session, created, activity, attached, dead, command, pid, w, h] = line.split('\t');
+    const [session, created, activity, attached, dead, command, pid, w, h, start] = line.split('\t');
     if (!session.startsWith('ms-')) continue;
     panes.push({
       session, created: Number(created) * 1000, activity: Number(activity) * 1000, attached: Number(attached),
-      dead: dead === '1', command, pid: Number(pid), width: Number(w), height: Number(h),
+      dead: dead === '1', command, pid: Number(pid), width: Number(w), height: Number(h), serverStart: Number(start),
     });
   }
   return panes;

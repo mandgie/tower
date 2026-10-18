@@ -123,6 +123,8 @@ export function App() {
     setTodosOpen(true);
     setTodoFocus({ id, at: Date.now() });
   }, [todos, activeId, workspaces, updateWs]);
+  // Sessions a shutdown took with it keep their panes until they are resumed (server/sessions.ts trackLost).
+  const lostNames = useMemo(() => new Set((snapshot?.lost ?? []).map((l) => l.tmux)), [snapshot?.lost]);
   // Follow panes whose tmux session was renamed (a Claude process moved to a new session id after
   // /clear, or a Codex launch learned its thread id), and drop panes whose tmux session is gone.
   useEffect(() => {
@@ -136,7 +138,7 @@ export function App() {
     const renamed = snapshot.renamed ?? {};
     const next = workspaces.map((w) => {
       const panes = w.panes.map((p) => {
-        if (liveNames.has(p.tmux)) return p;
+        if (liveNames.has(p.tmux) || lostNames.has(p.tmux)) return p;
         // The server records every rename it made. Fall back to the one unclaimed live session of the
         // same agent, which covers a rename the server no longer remembers.
         let target = renamed[p.tmux];
@@ -152,7 +154,7 @@ export function App() {
         }
         return p;
       }).filter((p) => {
-        const keep = liveNames.has(p.tmux) || (p.openedAt ?? 0) > cutoff;
+        const keep = liveNames.has(p.tmux) || lostNames.has(p.tmux) || (p.openedAt ?? 0) > cutoff;
         if (!keep) { changed = true; if (focused === p.tmux) focusMoved = null; }
         return keep;
       });
@@ -169,6 +171,19 @@ export function App() {
       if (selectedMoved !== undefined) setSelectedKey(selectedMoved);
     }
   }, [snapshot]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Resume the lost sessions of the workspace on screen, each once. The others wait until their workspace is opened.
+  const resumeAsked = useRef(new Set<string>());
+  const [resumeErrors, setResumeErrors] = useState<Record<string, string>>({});
+  const resumeLost = useCallback((tmux: string) => {
+    resumeAsked.current.add(tmux);
+    setResumeErrors(({ [tmux]: _, ...rest }) => rest);
+    api.resumeLost(tmux, localStorage.getItem('ms.skipPerms') !== '0')
+      .catch((e) => setResumeErrors((cur) => ({ ...cur, [tmux]: (e as Error).message })));
+  }, []);
+  useEffect(() => {
+    for (const p of active?.panes ?? []) if (lostNames.has(p.tmux) && !resumeAsked.current.has(p.tmux)) resumeLost(p.tmux);
+  }, [active, lostNames, resumeLost]);
 
   // Sessions started on the phone join a workspace here, without taking focus or switching workspace.
   useEffect(() => {
@@ -428,7 +443,7 @@ export function App() {
           <div className="stage-row">
           <div className="stage">
             {workspaces.map((w) => (
-              <PaneGrid key={w.id} workspace={w} byTmux={byTmux} focused={focused} visible={!transcriptMode && w.id === activeId}
+              <PaneGrid key={w.id} workspace={w} byTmux={byTmux} lost={lostNames} resumeErrors={resumeErrors} onResumeLost={resumeLost} focused={focused} visible={!transcriptMode && w.id === activeId}
                 onFocus={(tmux) => { setFocused(tmux); const s = byTmux.get(tmux); if (s) setSelectedKey(s.key); }}
                 onSwap={swapPanes} onMaximize={setMaximized} onRemove={removePane} onKill={killPane} onAdd={duplicate} onTodo={showTodo} />
             ))}

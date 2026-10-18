@@ -10,7 +10,7 @@ import { shQuote } from './shell.js';
 import { trustFolder } from './trust.js';
 import { renameInWorkspaceOps, pruneWorkspaceOps } from './workspaces.js';
 import { sortSessions, buildProjects } from '../shared/snapshot.js';
-import type { Session, Snapshot, Agent, PendingLaunch, Placement } from '../shared/types.js';
+import type { Session, Snapshot, Agent, PendingLaunch, Placement, LostSession } from '../shared/types.js';
 
 const WORKING_WINDOW_MS = 8000;
 
@@ -68,6 +68,70 @@ function pruneRenames(panes: TmuxPane[]): void {
   let changed = false;
   for (const [k, v] of renames) if (!alive.has(v) || alive.has(k)) { renames.delete(k); changed = true; }
   if (changed) saveRenames();
+}
+
+/**
+ * What ran in the tmux server at the last look, and the sessions a dead tmux server took with it. A
+ * shutdown kills tmux; the next look sees a different server start time (or no server), and every session
+ * of the old server that is not running now is lost, not closed. The UI keeps those panes and resumes them.
+ */
+const LIVE_FILE = path.join(APP_DIR, 'live.json');
+const LOST_MAX_AGE_MS = 14 * 24 * 3600 * 1000;
+let liveRecord: { serverStart: number; sessions: LostSession[] } = { serverStart: 0, sessions: [] };
+const lost = new Map<string, LostSession>();
+try {
+  const j = JSON.parse(fs.readFileSync(LIVE_FILE, 'utf8'));
+  if (Array.isArray(j.sessions)) liveRecord = { serverStart: Number(j.serverStart) || 0, sessions: j.sessions };
+  for (const l of (j.lost ?? []) as LostSession[]) lost.set(l.tmux, l);
+} catch { /* none */ }
+let liveJson = '';
+function saveLive(): void {
+  const j = JSON.stringify({ ...liveRecord, lost: [...lost.values()] });
+  if (j === liveJson) return;
+  liveJson = j;
+  fs.writeFile(LIVE_FILE, j, () => {});
+}
+
+function trackLost(panes: TmuxPane[], sessions: Session[]): void {
+  const now = Date.now();
+  const alive = new Set(panes.map((p) => p.session));
+  const serverStart = panes[0]?.serverStart ?? 0;
+  if (liveRecord.serverStart && serverStart !== liveRecord.serverStart) {
+    for (const s of liveRecord.sessions) if (!alive.has(s.tmux) && !lost.has(s.tmux)) lost.set(s.tmux, { ...s, at: now });
+  }
+  // Only sessions with a conversation on disk can be resumed; a fresh launch that never got one cannot.
+  const current: LostSession[] = [];
+  for (const s of sessions) {
+    if (s.live?.kind !== 'tmux' || s.live.dead || !s.transcriptPath) continue;
+    current.push({ tmux: s.live.tmux, agent: s.agent, id: s.id, cwd: s.cwd, at: now });
+  }
+  // The UI only uses entries for panes it still has, so one nobody resumed for two weeks can go.
+  for (const [t, l] of lost) if (alive.has(t) || now - l.at > LOST_MAX_AGE_MS) lost.delete(t);
+  const same = current.length === liveRecord.sessions.length && current.every((c, i) => liveRecord.sessions[i].tmux === c.tmux && liveRecord.sessions[i].id === c.id && liveRecord.sessions[i].cwd === c.cwd);
+  if (serverStart) liveRecord = { serverStart, sessions: same ? liveRecord.sessions : current };
+  else liveRecord = { serverStart: 0, sessions: [] };
+  saveLive();
+}
+
+export function lostSessions(): LostSession[] {
+  return [...lost.values()];
+}
+
+/** Resume a lost session. Its pane follows a new tmux name through the rename map, like after /clear. */
+export async function resumeLost(tmux: string, s: Session, o: { skipPermissions?: boolean } = {}): Promise<{ tmux: string }> {
+  const r = await resumeSession(s, o);
+  if (r.tmux !== tmux) {
+    for (const [k, v] of renames) if (v === tmux) renames.set(k, r.tmux);
+    renames.set(tmux, r.tmux);
+    saveRenames();
+  }
+  lost.delete(tmux);
+  saveLive();
+  return r;
+}
+
+export function lostSession(tmux: string): LostSession | undefined {
+  return lost.get(tmux);
 }
 
 function tmuxName(agent: Agent, id: string): string {
@@ -162,6 +226,7 @@ export async function buildSnapshot(): Promise<Snapshot> {
     byKey.set(key, s);
   }
 
+  trackLost(panes, sessions);
   sortSessions(sessions);
   const extraDirs = settings.extraProjectDirs.filter((d) => fs.existsSync(d)).map((cwd) => ({ cwd, name: projectName(cwd) }));
   const projects = buildProjects(sessions, extraDirs);
@@ -320,6 +385,10 @@ export async function resumeSession(s: Session, o: { skipPermissions?: boolean; 
 }
 
 export async function closeTmux(name: string): Promise<void> {
+  // A session closed on purpose is not lost, even if it was the last one and tmux looks gone next time.
+  liveRecord.sessions = liveRecord.sessions.filter((s) => s.tmux !== name);
+  lost.delete(name);
+  saveLive();
   await killSession(name);
   pending.delete(name);
   savePending();

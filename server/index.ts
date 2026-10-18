@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { PORT } from './config.js';
-import { buildSnapshot, launchNew, resumeSession, closeTmux, listProjectDirs, folderInfo, placeSession, clearPlacement } from './sessions.js';
+import { buildSnapshot, launchNew, resumeSession, resumeLost, lostSession, lostSessions, closeTmux, listProjectDirs, folderInfo, placeSession, clearPlacement } from './sessions.js';
 import { claudeTranscript } from './claude.js';
 import { codexTranscript } from './codex.js';
 import { ensureServer, capturePane, sendKeys, pressKeys, paneModes, scrollPane } from './tmux.js';
@@ -39,7 +39,7 @@ const remoteSockets = new Set<WebSocket>();
 let refreshing = false;
 let refreshQueued = false;
 
-const DELTA_FIELDS = ['extraDirs', 'pending', 'renamed', 'workspaces', 'placements', 'workspaceOps', 'todos', 'todoScans'] as const;
+const DELTA_FIELDS = ['extraDirs', 'pending', 'renamed', 'workspaces', 'placements', 'workspaceOps', 'todos', 'todoScans', 'lost'] as const;
 
 async function refresh(): Promise<Snapshot> {
   if (refreshing) { refreshQueued = true; return snapshot; }
@@ -49,6 +49,7 @@ async function refresh(): Promise<Snapshot> {
     applyDone(next.sessions);
     next.workspaces = loadWorkspaces();
     next.workspaceOps = workspaceOps();
+    next.lost = lostSessions();
     Object.assign(next, todoState());
     linkTodoSessions(next.sessions, next.renamed);
     checkTodoFinish(next.sessions, next.renamed);
@@ -220,6 +221,19 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         setTimeout(refresh, 300);
         return json(res, 200, r);
       }
+    }
+    mm = p.match(/^\/api\/lost\/([^/]+)\/resume$/);
+    if (mm && m === 'POST') {
+      const name = decodeURIComponent(mm[1]);
+      const l = lostSession(name);
+      if (!l) return json(res, 404, { error: 'Nothing to resume' });
+      const key = `${l.agent}:${l.id}`;
+      const s = snapshot.sessions.find((x) => x.key === key) || (await refresh()).sessions.find((x) => x.key === key);
+      if (!s) return json(res, 404, { error: 'Unknown session' });
+      const body = await readBody(req);
+      const r = await resumeLost(name, s, { skipPermissions: body.skipPermissions });
+      setTimeout(refresh, 300);
+      return json(res, 200, r);
     }
     if (m === 'POST' && p === '/api/sessions/new') {
       const body = await readBody(req);

@@ -48,6 +48,7 @@ export function applyDelta(prev: Snapshot, d: SnapshotDelta): Snapshot {
     workspaceOps: d.workspaceOps ?? prev.workspaceOps,
     todos: d.todos ?? prev.todos,
     todoScans: d.todoScans ?? prev.todoScans,
+    lost: d.lost ?? prev.lost,
   };
 }
 

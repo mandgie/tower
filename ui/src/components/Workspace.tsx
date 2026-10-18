@@ -87,8 +87,9 @@ export function TodoBadge({ todo, onClick }: { todo: NonNullable<Session['todo']
   );
 }
 
-export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap, onMaximize, onRemove, onKill, onAdd, onTodo }: {
-  workspace: Workspace; byTmux: Map<string, Session>; focused: string | null; visible: boolean;
+export function PaneGrid({ workspace, byTmux, lost, resumeErrors, onResumeLost, focused, visible, onFocus, onSwap, onMaximize, onRemove, onKill, onAdd, onTodo }: {
+  workspace: Workspace; byTmux: Map<string, Session>; lost: Set<string>; resumeErrors: Record<string, string>; onResumeLost: (tmux: string) => void;
+  focused: string | null; visible: boolean;
   onFocus: (tmux: string) => void; onSwap: (a: string, b: string) => void; onMaximize: (tmux: string | null) => void;
   onRemove: (tmux: string) => void; onKill: (tmux: string) => void; onAdd: () => void; onTodo: (id: string) => void;
 }) {
@@ -111,7 +112,7 @@ export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap,
         const s = byTmux.get(p.tmux);
         const hidden = !!max && max !== p.tmux;
         return (
-          <PaneView key={p.tmux} pane={p} session={s} focused={focused === p.tmux && visible} hidden={hidden} maximized={max === p.tmux}
+          <PaneView key={p.tmux} pane={p} session={s} lost={lost.has(p.tmux)} resumeError={resumeErrors[p.tmux]} onResume={() => onResumeLost(p.tmux)} focused={focused === p.tmux && visible} hidden={hidden} maximized={max === p.tmux}
             dragging={dragging === p.tmux} over={over === p.tmux}
             onFocus={() => onFocus(p.tmux)} onMaximize={() => onMaximize(max === p.tmux ? null : p.tmux)}
             onRemove={() => onRemove(p.tmux)} onKill={() => onKill(p.tmux)} onTodo={onTodo}
@@ -133,8 +134,8 @@ export function PaneGrid({ workspace, byTmux, focused, visible, onFocus, onSwap,
   );
 }
 
-function PaneView({ pane, session: s, focused, hidden, maximized, dragging, over, onFocus, onMaximize, onRemove, onKill, onTodo, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop }: {
-  pane: Pane; session?: Session; focused: boolean; hidden: boolean; maximized: boolean; dragging: boolean; over: boolean;
+function PaneView({ pane, session: s, lost, resumeError, onResume, focused, hidden, maximized, dragging, over, onFocus, onMaximize, onRemove, onKill, onTodo, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop }: {
+  pane: Pane; session?: Session; lost: boolean; resumeError?: string; onResume: () => void; focused: boolean; hidden: boolean; maximized: boolean; dragging: boolean; over: boolean;
   onFocus: () => void; onMaximize: () => void; onRemove: () => void; onKill: () => void; onTodo: (id: string) => void;
   onDragStart: () => void; onDragEnd: () => void; onDragOver: (e: DragEvent) => void; onDragLeave: () => void; onDrop: (e: DragEvent) => void;
 }) {
@@ -162,7 +163,12 @@ function PaneView({ pane, session: s, focused, hidden, maximized, dragging, over
         </span>
       </header>
       <div className="pane-body">
-        <TerminalPane tmux={pane.tmux} active={focused && !hidden} agent={pane.agent} />
+        {lost ? (
+          <div className="pane-lost">
+            {resumeError ? <p>Could not resume this session: {resumeError}</p> : <p>This session stopped when the Mac shut down. Resuming…</p>}
+            {resumeError && <button onClick={(e) => { e.stopPropagation(); onResume(); }}>Try again</button>}
+          </div>
+        ) : <TerminalPane tmux={pane.tmux} active={focused && !hidden} agent={pane.agent} />}
       </div>
     </section>
   );
