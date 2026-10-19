@@ -145,6 +145,10 @@ export async function startTodo(id: string, sessions: Session[], skipPermissions
   const t = store.todos.find((x) => x.id === id);
   if (!t) throw new Error('Unknown todo');
   const from = sessions.find((s) => s.key === t.session);
+  // A todo found in a todo worktree belongs to the main checkout (see mainFolder).
+  const cwd = await mainFolder(t.cwd);
+  if (cwd !== t.cwd) { t.cwd = cwd; save(); }
+  if (!fs.existsSync(t.cwd)) throw new Error(`The todo's folder no longer exists: ${t.cwd}`);
   const wt = await todoWorktree(t);
   const prompt = [
     t.title,
@@ -161,6 +165,45 @@ export async function startTodo(id: string, sessions: Session[], skipPermissions
   save();
   onChange();
   return r;
+}
+
+/**
+ * The folder in the main checkout for a folder inside one of Tower's todo worktrees; any other folder
+ * comes back as it is. A session started from a todo runs in a worktree, so a todo found in that session
+ * would otherwise point into the worktree: the cleanup removes the folder after the merge, and a worktree
+ * made from it would branch from the todo branch, not from the main branch. This works after the worktree
+ * is gone too, because the todo that made the worktree knows its main checkout.
+ */
+async function mainFolder(dir: string, depth = 0): Promise<string> {
+  const rel = path.relative(WORKTREES, dir);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || depth > 5) return dir;
+  const [name, ...rest] = rel.split(path.sep);
+  const wtPath = path.join(WORKTREES, name);
+  let top = '';
+  if (fs.existsSync(wtPath)) {
+    // A worktree's common git folder is the main checkout's .git.
+    const common = await git(wtPath, ['rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => '');
+    if (path.basename(common) === '.git' && fs.existsSync(path.dirname(common))) top = path.dirname(common);
+  }
+  if (!top) {
+    const owner = store.todos.find((t) => t.startedIn?.worktree?.path === wtPath);
+    const from = owner ? await mainFolder(owner.cwd, depth + 1) : '';
+    if (from && fs.existsSync(from)) top = await git(from, ['rev-parse', '--show-toplevel']).catch(() => '');
+  }
+  if (!top) return dir;
+  // The same subfolder in the main checkout, when it has one.
+  const sub = path.join(top, ...rest);
+  return rest.length && fs.existsSync(sub) ? sub : top;
+}
+
+/** Point the todos found in todo worktrees (before mainFolder existed) at their main checkout. */
+async function repairFolders(): Promise<void> {
+  let changed = false;
+  for (const t of store.todos) {
+    const cwd = await mainFolder(t.cwd);
+    if (cwd !== t.cwd) { t.cwd = cwd; changed = true; }
+  }
+  if (changed) { save(); onChange(); }
 }
 
 /** How often todoWorktreeTick looks at the worktrees: a few git commands per worktree. */
@@ -439,7 +482,8 @@ async function scanSession(workspace: string, s: Session): Promise<void> {
   if (!read) return;
   const text = render(read.records);
   if (text.trim()) {
-    const near = store.todos.filter((t) => t.workspace === workspace || t.cwd === s.cwd);
+    const cwd = await mainFolder(s.cwd);
+    const near = store.todos.filter((t) => t.workspace === workspace || t.cwd === cwd);
     const open = near.filter((t) => t.status === 'proposed' || t.status === 'accepted').slice(-40);
     const past = near.filter((t) => t.status === 'done' || t.status === 'rejected').slice(-60);
     const commits = await recentCommits(s.cwd, open);
@@ -458,7 +502,7 @@ async function scanSession(workspace: string, s: Session): Promise<void> {
       // The quote is the proof; a todo whose quote is not in the turns is the model's invention.
       if (!f.title.trim() || !haystack.includes(normalize(f.quote).slice(0, 60))) continue;
       store.todos.push({
-        id: randomUUID(), workspace, session: s.key, sessionTitle: s.title || s.firstPrompt.slice(0, 80), cwd: s.cwd,
+        id: randomUUID(), workspace, session: s.key, sessionTitle: s.title || s.firstPrompt.slice(0, 80), cwd,
         title: f.title.trim(), detail: f.detail.trim(), quote: f.quote.trim(), createdAt: Date.now(), status: 'proposed',
         held: { file },
       });
@@ -636,3 +680,6 @@ function run(cmd: string, args: string[], input: string): Promise<string> {
     p.stdin.end(input);
   });
 }
+
+// After the module has loaded (WORKTREES and the rest are set), before the first scan.
+queue = queue.then(repairFolders).catch(() => {});
