@@ -6,11 +6,19 @@ import { api, relTime } from '../api';
  * The active workspace's todos, beside the grid. The finder (server/todos.ts) proposes; the user accepts
  * or rejects, and ticks accepted ones off. Finished and rejected ones stay one click away.
  */
-export function TodoPanel({ workspace, todos, scan, byKey, byTmux, focus, onToggle, onOpenSession, onStart, onClose }: {
+export function TodoPanel({ workspace, todos, scan, byKey, byTmux, focus, onToggle, onScan, workspaceOf, phone, onOpenSession, onStart, onClose }: {
   workspace: { id: string; name: string; todos?: boolean };
   focus?: { id: string; at: number } | null;  // a todo to scroll to and flash (from a session's Todo badge)
   todos: Todo[]; scan?: TodoScan; byKey: Map<string, Session>; byTmux: Map<string, Session>;
-  onToggle: (on: boolean) => void; onOpenSession: (s: Session) => void; onStart: (t: Todo) => Promise<void>; onClose: () => void;
+  /** Turns the finder on or off; the workspaces live on the Mac, so the phone leaves it out. */
+  onToggle?: (on: boolean) => void;
+  /** Scan now; by default it scans `workspace`. */
+  onScan?: () => Promise<unknown>;
+  /** The workspace a todo belongs to, shown on each todo when the list mixes workspaces. */
+  workspaceOf?: (t: Todo) => string | undefined;
+  /** The phone layout: the phone screen draws the header, and the panel fills the screen. */
+  phone?: boolean;
+  onOpenSession: (s: Session) => void; onStart: (t: Todo) => Promise<void>; onClose: () => void;
 }) {
   const [starting, setStarting] = useState<string | null>(null);
   const start = async (t: Todo) => {
@@ -70,41 +78,44 @@ export function TodoPanel({ workspace, todos, scan, byKey, byTmux, focus, onTogg
   const old = todos.filter((t) => t.status === 'done' || t.status === 'rejected').sort((a, b) => (b.decidedAt ?? 0) - (a.decidedAt ?? 0));
   const source = (t: Todo) => {
     const s = byKey.get(t.session);
+    const ws = workspaceOf?.(t);
     return (
       <button className="todo-source" disabled={!s} onClick={() => s && onOpenSession(s)} title={s ? 'Open the session' : 'The session is gone'}>
         <span className={`dot ${s ? `status-${s.status}` : 'status-ended'}`} />
+        {ws && <span className="todo-source-ws">{ws}</span>}
         <span className="todo-source-title">{t.sessionTitle}</span>
       </button>
     );
   };
 
   return (
-    <aside className="todos" aria-label="Todos">
-      <header className="todos-head">
+    <aside className={`todos ${phone ? 'todos-phone' : ''}`} aria-label="Todos">
+      {!phone && <header className="todos-head">
         <div>
           <div className="todos-title">Todos</div>
           <div className="todos-sub">{workspace.name}</div>
         </div>
-        {workspace.todos && (
+        {workspace.todos && onToggle && (
           <label className="switch" title="Find todos in this workspace's Claude sessions">
             <input type="checkbox" checked onChange={() => onToggle(false)} /><span />
           </label>
         )}
         <button className="todos-close" onClick={onClose} title="Hide todos">×</button>
-      </header>
+      </header>}
 
       {!workspace.todos ? (
         <div className="todos-off">
           <p>Tower can read the Claude sessions in this workspace and propose the work they leave open: a skipped test, a failed build, a “later” from you.</p>
           <p className="muted small">It reads a session after it has been quiet for 3 minutes, with <code>claude -p</code>. It never types into a session. You accept or reject each todo.</p>
-          <button className="btn primary" onClick={() => onToggle(true)}>Find todos in this workspace</button>
+          {onToggle ? <button className="btn primary" onClick={() => onToggle(true)}>Find todos in this workspace</button>
+            : <p className="muted small">Turn it on in the Todos panel on the Mac.</p>}
         </div>
       ) : (
         <>
           <div className="todos-scan">
             {scan?.running ? <span className="todos-spin">Reading sessions…</span>
               : <span className="muted">{scan?.lastAt ? `Read ${relTime(scan.lastAt)}` : 'Not read yet'}</span>}
-            <button className="btn ghost small" disabled={scan?.running} onClick={() => api.scanTodos(workspace.id).catch((e) => setErr((e as Error).message))}>Scan now</button>
+            <button className="btn ghost small" disabled={scan?.running} onClick={() => (onScan ? onScan() : api.scanTodos(workspace.id)).catch((e) => setErr((e as Error).message))}>Scan now</button>
           </div>
           {(scan?.error || err) && <div className="todos-error">{err || scan?.error}</div>}
 

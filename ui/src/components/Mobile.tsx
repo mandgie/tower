@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
-import type { Agent, Session, Snapshot, WorkspaceSummary, WorkspaceOpRequest } from '../../../shared/types';
+import type { Agent, Session, Snapshot, TodoScan, WorkspaceSummary, WorkspaceOpRequest } from '../../../shared/types';
 import { placementTarget, applyWorkspaceOp } from '../../../shared/snapshot';
 import { api, relTime, useNow, useSnapshot, usePresent, useViewing, type LaunchBody } from '../api';
 import { statusWord } from './StatusStrip';
@@ -8,6 +8,7 @@ import { LoopBadge } from './LoopBadge';
 import { Transcript } from './Transcript';
 import { TerminalPane } from './Terminal';
 import { NewSession } from './NewSession';
+import { TodoPanel } from './TodoPanel';
 
 /**
  * The phone layout: a list of sessions with the ones waiting for you on top, and a single-session view
@@ -20,6 +21,8 @@ const LAYOUT_KEY = 'ms.layout';
 const TAB_KEY = 'ms.mobileTab';
 const FILTER_KEY = 'ms.mobileWorkspace';
 const RECENT_PAGE = 12;
+/** The hash key of the todo screen; session keys never start with a colon. */
+const TODOS = ':todos';
 
 /** Phone layout by default on a narrow screen outside Electron; either can be forced per device. */
 export function useMobileLayout(): [boolean, (v: 'mobile' | 'desktop') => void] {
@@ -40,7 +43,10 @@ export function useMobileLayout(): [boolean, (v: 'mobile' | 'desktop') => void] 
 let pushedHash = false;
 
 function useHashKey(): [string | null, (key: string | null) => void] {
-  const read = () => { const m = location.hash.match(/^#\/s\/(.+)$/); return m ? decodeURIComponent(m[1]) : null; };
+  const read = () => {
+    if (location.hash === '#/todos') return TODOS;
+    const m = location.hash.match(/^#\/s\/(.+)$/); return m ? decodeURIComponent(m[1]) : null;
+  };
   const [key, setKey] = useState(read);
   useEffect(() => {
     const on = () => setKey(read());
@@ -49,7 +55,7 @@ function useHashKey(): [string | null, (key: string | null) => void] {
   }, []);
   // Back pops the entry the app pushed, so the browser's own back gesture and the ‹ button agree.
   const go = (k: string | null) => {
-    if (k) { pushedHash = true; location.hash = `#/s/${encodeURIComponent(k)}`; }
+    if (k) { pushedHash = true; location.hash = k === TODOS ? '#/todos' : `#/s/${encodeURIComponent(k)}`; }
     else if (pushedHash) { pushedHash = false; history.back(); }
     else { history.replaceState(null, '', location.pathname + location.search); setKey(null); }
   };
@@ -111,6 +117,7 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   const sheetSession = sheet?.kind === 'session' ? sessions.find((s) => s.key === sheet.key && tmuxOf(s)) : undefined;
   const sheetWorkspace = sheet?.kind === 'workspace' ? workspaces.find((x) => x.id === sheet.id) : undefined;
   const menuFor = (s: Session) => setSheet({ kind: 'session', key: s.key });
+  const todoView = useMemo(() => todoScope(snapshot, scope), [snapshot, scope]);
 
   const launch = async (body: LaunchBody) => {
     // Started from a workspace chip, the session joins that workspace on the Mac; from All, the one in its folder.
@@ -123,9 +130,11 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
 
   return (
     <div className="m-app">
-      {key && session ? <SessionView s={session} connected={connected} onBack={() => go(null)} onMenu={() => menuFor(session)} />
+      {key === TODOS ? <TodoScreen view={todoView} sessions={sessions} connected={connected} onOpen={(s) => go(s.key)} onBack={() => go(null)} />
+        : key && session ? <SessionView s={session} connected={connected} onBack={() => go(null)} onMenu={() => menuFor(session)} />
         : key && snapshot ? <div className="m-empty"><p>That session is gone.</p><button className="btn" onClick={() => go(null)}>Back to the list</button></div>
-        : <SessionList sessions={sessions} scopes={scopes} scope={scope} onScope={setFilter} loaded={!!snapshot} connected={connected} onOpen={(s) => go(s.key)} onMenu={menuFor} onScopeMenu={(id) => setSheet({ kind: 'workspace', id })} onNew={() => setNewOpen(true)} onDesktop={onDesktop} />}
+        : <SessionList sessions={sessions} scopes={scopes} scope={scope} onScope={setFilter} loaded={!!snapshot} connected={connected} onOpen={(s) => go(s.key)} onMenu={menuFor} onScopeMenu={(id) => setSheet({ kind: 'workspace', id })} onNew={() => setNewOpen(true)} onDesktop={onDesktop}
+          todos={todoView.on.length ? todoView.todos.filter((t) => t.status === 'proposed').length : null} onTodos={() => go(TODOS)} />}
       {sheetSession && <SessionSheet s={sheetSession} workspaces={workspaces} onClose={() => setSheet(null)}
         onKilled={() => { setSheet(null); if (key === sheetSession.key) go(null); }} />}
       {sheetWorkspace && <WorkspaceSheet w={sheetWorkspace} onClose={() => setSheet(null)} />}
@@ -219,10 +228,12 @@ function Chip({ id, name, live, done, on, onScope, onMenu }: {
 
 // ---- list ------------------------------------------------------------------------------------
 
-function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOpen, onMenu, onScopeMenu, onNew, onDesktop }: {
+function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOpen, onMenu, onScopeMenu, onNew, onDesktop, todos, onTodos }: {
   sessions: Session[]; scopes: Scope[]; scope: Scope | null; onScope: (id: string) => void;
   loaded: boolean; connected: boolean; onOpen: (s: Session) => void; onMenu: (s: Session) => void; onScopeMenu: (id: string) => void;
   onNew: () => void; onDesktop: () => void;
+  todos: number | null;  // proposals waiting in the chip's workspaces; null when no workspace finds todos
+  onTodos: () => void;
 }) {
   const now = useNow();
   const [recentShown, setRecentShown] = useState(RECENT_PAGE);
@@ -252,6 +263,11 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
           {groups.done.length > 0 && <span className="sum-wait">{groups.done.length} need{groups.done.length === 1 ? 's' : ''} you</span>}
           {groups.working.length > 0 && <span className="sum-work">{groups.working.length} working</span>}
         </span>
+        {todos !== null && (
+          <button className="m-todos-btn" onClick={onTodos} aria-label={todos ? `Todos, ${todos} proposed` : 'Todos'}>
+            Todos{todos > 0 && <span className="m-todos-n">{todos}</span>}
+          </button>
+        )}
         <button className="m-icon-btn" onClick={onNew} aria-label="New session">+</button>
       </header>
       <ScopeChips scopes={scopes} scope={scope} total={total} onScope={onScope} onMenu={onScopeMenu} />
@@ -291,6 +307,7 @@ function Row({ s, now, onOpen, onMenu }: { s: Session; now: number; onOpen: (s: 
         <span className="m-row-meta">
           <span>{s.project}</span>
           {s.gitBranch && s.gitBranch !== 'HEAD' && <span className="branch">{s.gitBranch}</span>}
+          {s.todo && <span className={`m-tag-todo ${s.todo.status === 'done' ? 'done' : ''}`}>{s.todo.status === 'done' ? 'todo ✓' : 'todo'}</span>}
           {s.live && <LoopBadge session={s} />}
           {s.live && <ContextBadge session={s} />}
         </span>
@@ -300,6 +317,68 @@ function Row({ s, now, onOpen, onMenu }: { s: Session; now: number; onOpen: (s: 
         <time>{relTime(s.updatedAt, now)}</time>
       </span>
     </button>
+  );
+}
+
+// ---- todos ---------------------------------------------------------------------------------
+
+/**
+ * The todos the phone shows: the chip's workspace, or every workspace that finds todos when the chip is
+ * All or Other (Other is not a workspace, so it has no todos of its own).
+ */
+interface TodoView {
+  one?: WorkspaceSummary;
+  on: WorkspaceSummary[];   // the workspaces that find todos, of those shown
+  todos: NonNullable<Snapshot['todos']>;
+  scan?: TodoScan;
+  names: Map<string, string>;
+}
+
+function todoScope(snapshot: Snapshot | null, scope: Scope | null): TodoView {
+  const all = snapshot?.workspaces ?? [];
+  const one = scope && scope.id !== 'other' ? all.find((w) => w.id === scope.id) : undefined;
+  const on = (one ? [one] : all).filter((w) => w.todos);
+  const ids = new Set((one ? [one] : on).map((w) => w.id));
+  const todos = (snapshot?.todos ?? []).filter((t) => ids.has(t.workspace));
+  const scans = (snapshot?.todoScans ?? []).filter((x) => ids.has(x.workspace));
+  const scan = scans.length <= 1 ? scans[0] : {
+    workspace: 'all', running: scans.some((x) => x.running),
+    lastAt: Math.max(...scans.map((x) => x.lastAt ?? 0)) || undefined,
+    error: scans.map((x) => x.error).filter(Boolean).join('\n') || undefined,
+  };
+  return { one, on, todos, scan, names: new Map(all.map((w) => [w.id, w.name])) };
+}
+
+function TodoScreen({ view, sessions, connected, onOpen, onBack }: {
+  view: TodoView; sessions: Session[]; connected: boolean; onOpen: (s: Session) => void; onBack: () => void;
+}) {
+  const { byKey, byTmux } = useMemo(() => {
+    const byKey = new Map<string, Session>(), byTmux = new Map<string, Session>();
+    for (const s of sessions) { byKey.set(s.key, s); if (s.live?.kind === 'tmux') byTmux.set(s.live.tmux, s); }
+    return { byKey, byTmux };
+  }, [sessions]);
+  const { one, on } = view;
+  const workspace = one ?? { id: 'all', name: 'All workspaces', todos: on.length > 0 };
+  return (
+    <div className="m-screen">
+      <header className="m-top m-top-session">
+        <button className="m-back" onClick={onBack} aria-label="Back">
+          <svg width="12" height="20" viewBox="0 0 12 20" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2 2 10l8 8" /></svg>
+        </button>
+        <div className="m-title">
+          <span className="m-title-main">Todos</span>
+          <span className="m-title-sub">{!connected && <span className="m-offline">offline · </span>}{workspace.name}</span>
+        </div>
+      </header>
+      <TodoPanel phone workspace={workspace} todos={view.todos} scan={view.scan} byKey={byKey} byTmux={byTmux}
+        onScan={one ? undefined : () => Promise.all(on.map((w) => api.scanTodos(w.id)))}
+        workspaceOf={one || on.length < 2 ? undefined : (t) => view.names.get(t.workspace)}
+        onOpenSession={onOpen} onClose={onBack}
+        onStart={async (t) => {
+          const r = await api.startTodo(t.id, localStorage.getItem('ms.skipPerms') !== '0');
+          if (r.key) onOpen({ key: r.key } as Session);
+        }} />
+    </div>
   );
 }
 

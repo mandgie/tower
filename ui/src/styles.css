@@ -584,3 +584,20 @@ button.todo-check:hover { border-color: var(--codex); background: rgba(127,224,2
 .todo-closed .todo-finished-head { color: var(--loop); }
 .todo-closed .todo-quote { margin: 0; }
 .todo-closed-why { color: var(--dim); font-size: 11px; line-height: 1.4; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Todos on the phone: the panel fills the screen, with finger-sized controls. */
+.m-todos-btn { height: 36px; padding: 0 12px; border-radius: 10px; background: var(--raised); color: var(--fog); font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 7px; }
+.m-todos-n { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--wait); color: var(--ink); font-size: 12px; font-weight: 700; display: inline-grid; place-items: center; }
+.m-tag-todo { color: var(--loop); font-size: 11px; padding: 0 5px; border: 1px solid rgba(157,184,255,0.35); border-radius: 4px; }
+.m-tag-todo.done { color: var(--dim); border-color: var(--line); }
+.todos.todos-phone { width: auto; flex: 1; border-left: 0; }
+.todos-phone .todos-scan { padding: 8px 16px; font-size: 13px; }
+.todos-phone .todos-body { padding: 4px 16px calc(env(safe-area-inset-bottom) + 24px); -webkit-overflow-scrolling: touch; }
+.todos-phone .todo-title { font-size: 15px; }
+.todos-phone .todo-detail, .todos-phone .todo-quote, .todos-phone .todo-finished-text { font-size: 13px; }
+.todos-phone .btn.small { min-height: 36px; padding: 0 14px; font-size: 14px; }
+.todos-phone .todo-check { width: 24px; height: 24px; }
+.todos-phone .todo-x { width: 36px; height: 36px; font-size: 20px; opacity: 0.7; flex: 0 0 auto; }
+.todos-phone .todos-off { font-size: 14px; }
+.todo-source-ws { color: var(--mist); font-weight: 500; margin-right: 2px; white-space: nowrap; flex: 0 0 auto; }
+.todo-source-ws::after { content: ' ·'; color: var(--dim); }
