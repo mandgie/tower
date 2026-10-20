@@ -41,6 +41,7 @@ export interface Session {
   context?: SessionContext;  // context window fill after the last turn, from the transcript tail
   loop?: SessionLoop;        // a /loop (or other scheduled prompt) armed in this live Claude process
   todo?: { id: string; title: string; status: TodoStatus };  // the todo this session was started for (server/todos.ts)
+  spawn?: { name: string; parentKey?: string; parentTitle?: string; parentTmux?: string };  // another session started it with `tower spawn` (server/agents.ts)
 }
 
 /** What Claude's own scheduler will run next, read from ScheduleWakeup / CronCreate calls in the transcript. */
@@ -188,6 +189,7 @@ export interface Placement {
   tmux: string;
   cwd: string;
   workspace?: string;
+  after?: string;      // tmux name of the pane to put it next to (an agent's parent)
   at: number;
 }
 

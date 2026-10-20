@@ -29,6 +29,7 @@
     },
     "files": [
       "dist/**",
+      "cli/**",
       "ui/dist/**",
       "electron/**",
       "package.json",

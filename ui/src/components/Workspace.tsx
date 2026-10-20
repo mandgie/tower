@@ -152,6 +152,7 @@ function PaneView({ pane, session: s, lost, resumeError, onResume, focused, hidd
         <span className="dot" />
         <span className="pane-project">{s?.project ?? pane.tmux.replace(/^ms-\w+-/, '')}</span>
         {s?.todo && <TodoBadge todo={s.todo} onClick={() => onTodo(s.todo!.id)} />}
+        {s?.spawn && <span className="spawn-badge" title={`Agent "${s.spawn.name}", started by ${s.spawn.parentTitle ? `"${s.spawn.parentTitle}"` : 'another session'} with tower spawn`}>↳ {s.spawn.name}</span>}
         <span className="pane-title">{s?.title ?? ''}</span>
         {s && <LoopBadge session={s} />}
         {s && <ContextBadge session={s} />}

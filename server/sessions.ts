@@ -27,12 +27,18 @@ const PLACEMENTS_FILE = path.join(APP_DIR, 'placements.json');
 const placements = new Map<string, Placement>();
 try { for (const p of JSON.parse(fs.readFileSync(PLACEMENTS_FILE, 'utf8')) as Placement[]) placements.set(p.tmux, p); } catch { /* none */ }
 function savePlacements(): void {
-  fs.writeFile(PLACEMENTS_FILE, JSON.stringify([...placements.values()]), () => {});
+  // Synchronous: agents spawned in parallel place their panes at the same moment (server/agents.ts).
+  fs.writeFileSync(PLACEMENTS_FILE, JSON.stringify([...placements.values()]));
 }
 
-export function placeSession(tmux: string, cwd: string, workspace?: string): void {
-  placements.set(tmux, { tmux, cwd, workspace: typeof workspace === 'string' && workspace ? workspace : undefined, at: Date.now() });
+export function placeSession(tmux: string, cwd: string, workspace?: string, after?: string): void {
+  placements.set(tmux, { tmux, cwd, workspace: typeof workspace === 'string' && workspace ? workspace : undefined, after, at: Date.now() });
   savePlacements();
+}
+
+/** The workspace a session waits to join, for a session started from it before the Mac placed it. */
+export function placementOf(tmux: string): Placement | undefined {
+  return placements.get(tmux);
 }
 
 export function clearPlacement(tmux: string): void {
@@ -156,9 +162,10 @@ export async function buildSnapshot(): Promise<Snapshot> {
 
   const paneRegistry = await reconcilePaneNames(panes, liveClaude);
   pruneRenames(panes);
-  // A placement whose session ended before the Mac saw it has nowhere to go.
+  // A placement whose session ended before the Mac saw it has nowhere to go. A new one can be younger than
+  // the pane list read above, so give it a moment.
   const alive = new Set(panes.map((p) => p.session));
-  for (const t of placements.keys()) if (!alive.has(t)) clearPlacement(t);
+  for (const [t, p] of placements) if (!alive.has(t) && Date.now() - p.at > 15_000) clearPlacement(t);
   pruneWorkspaceOps(alive);
   const paneForKey = new Map<string, TmuxPane>();
   const attachedPanes = new Set<string>();

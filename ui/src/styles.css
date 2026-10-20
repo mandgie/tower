@@ -576,6 +576,7 @@ button.todo-check:hover { border-color: var(--codex); background: rgba(127,224,2
 .todo-badge:hover { background: rgba(157,184,255,0.22); }
 .todo-badge.done { background: rgba(127,224,200,0.12); color: var(--codex); }
 .todo-badge.rejected { opacity: 0.6; }
+.spawn-badge { flex: 0 0 auto; padding: 1px 7px; border-radius: 999px; background: rgba(157,184,255,0.12); color: var(--loop); font-size: 10.5px; font-weight: 600; line-height: 16px; white-space: nowrap; }
 .todo-tag { color: var(--loop); }
 .todo-tag.done { color: var(--codex); }
 .todo-card.flash, .todo-row.flash { animation: todo-flash 1.6s ease-out; }

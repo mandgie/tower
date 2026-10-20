@@ -10,6 +10,9 @@ export const APP_DIR = process.env.MS_APP_DIR || path.join(HOME, '.multisession'
 export const TMUX_SOCKET = 'multisession';
 /** Port to listen on. 0 (MS_PORT unset) lets the OS pick a free one; the chosen port is reported to Electron. */
 export const PORT = Number(process.env.MS_PORT || 0);
+/** Where this server listens, once it does. Sessions it starts get it as TOWER_URL, for the `tower` command. */
+export let SERVER_URL = '';
+export function setServerUrl(url: string): void { SERVER_URL = url; }
 
 fs.mkdirSync(APP_DIR, { recursive: true });
 

@@ -23,6 +23,7 @@ export function SessionHeader({ session: s, onResume, onFork, onKill, onTodo }: 
           <span className="agent-badge">{s.agent === 'claude' ? 'Claude' : 'Codex'}</span>
           <h2>{s.title || 'Untitled'}</h2>
           {s.todo && onTodo && <TodoBadge todo={s.todo} onClick={() => onTodo(s.todo!.id)} />}
+          {s.spawn && <span className="spawn-badge" title={`Agent "${s.spawn.name}", started by ${s.spawn.parentTitle ? `"${s.spawn.parentTitle}"` : 'another session'} with tower spawn`}>↳ {s.spawn.name}</span>}
           {s.live && <span className={`pill status-${s.status}`}>{external ? 'in another terminal' : statusWord(s.status)}</span>}
         </div>
         <div className="head-meta">

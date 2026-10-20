@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { PORT } from './config.js';
+import { PORT, APP_DIR, setServerUrl } from './config.js';
 import { buildSnapshot, launchNew, resumeSession, resumeLost, lostSession, lostSessions, closeTmux, listProjectDirs, folderInfo, placeSession, clearPlacement } from './sessions.js';
 import { claudeTranscript } from './claude.js';
 import { codexTranscript } from './codex.js';
@@ -15,6 +15,7 @@ import { applyDone, setViewing } from './seen.js';
 import { loadWorkspaces, saveWorkspaces, workspaceOps, addWorkspaceOp, clearWorkspaceOp } from './workspaces.js';
 import { runDoctor, doctorSummary } from './doctor.js';
 import { todoState, todoTick, scanWorkspace, setTodoStatus, startTodo, removeTodoWorktree, todoWorktreeTick, linkTodoSessions, checkTodoFinish, dismissFinish, onTodosChange } from './todos.js';
+import { spawnAgent, agentState, listAgents, sendToAgent, stopAgent, linkAgentSessions } from './agents.js';
 import { applyRemote, remoteInfo, rotateToken, isPaired, isLoopback, peerAllowed, originMatchesHost, handlePair, unpairedPage } from './remote.js';
 import type { Snapshot, SnapshotDelta } from '../shared/types.js';
 
@@ -52,6 +53,7 @@ async function refresh(): Promise<Snapshot> {
     next.lost = lostSessions();
     Object.assign(next, todoState());
     linkTodoSessions(next.sessions, next.renamed);
+    linkAgentSessions(next);
     checkTodoFinish(next.sessions, next.renamed);
     todoTick(next.workspaces, next.sessions);
     todoWorktreeTick(next.sessions);
@@ -235,6 +237,32 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       setTimeout(refresh, 300);
       return json(res, 200, r);
     }
+    if (p.startsWith('/api/agents')) {
+      // The `tower` command in a session on this Mac (cli/tower.mjs); not for the phone.
+      if (remote) return json(res, 403, { error: 'Only available on the Mac' });
+      const q = url.searchParams;
+      try {
+        if (m === 'POST' && p === '/api/agents/spawn') {
+          const r = await spawnAgent(snapshot, await readBody(req));
+          await refresh();
+          return json(res, 200, r);
+        }
+        if (m === 'GET' && p === '/api/agents') return json(res, 200, listAgents(snapshot, q.get('from'), q.get('all') === '1'));
+        if (m === 'GET' && p === '/api/agents/state') return json(res, 200, agentState(snapshot, q.get('from'), q.get('ref'), q.get('reply') === '1'));
+        if (m === 'POST' && p === '/api/agents/send') {
+          const b = await readBody(req);
+          const r = await sendToAgent(snapshot, b.from, b.ref, b.text);
+          setTimeout(refresh, 300);
+          return json(res, 200, r);
+        }
+        if (m === 'POST' && p === '/api/agents/stop') {
+          const b = await readBody(req);
+          const r = await stopAgent(snapshot, b.from, b.ref);
+          setTimeout(refresh, 200);
+          return json(res, 200, r);
+        }
+      } catch (e) { return json(res, 400, { error: (e as Error).message }); }
+    }
     if (m === 'POST' && p === '/api/sessions/new') {
       const body = await readBody(req);
       const r = await launchNew(body);
@@ -369,6 +397,25 @@ async function main() {
   applyRemote(loadSettings(), () => createServer(true));
 }
 
+/**
+ * Put the `tower` command (cli/tower.mjs) in APP_DIR/bin, which every session Tower starts has on PATH, and
+ * say where this server listens for sessions that did not get TOWER_URL. The dev server (no Electron parent,
+ * shared APP_DIR) leaves server.json to the app.
+ */
+function installCli(port: number): void {
+  try {
+    const src = fs.readFileSync(path.resolve(here, '..', 'cli', 'tower.mjs'), 'utf8');
+    const bin = path.join(APP_DIR, 'bin');
+    const dest = path.join(bin, 'tower');
+    fs.mkdirSync(bin, { recursive: true });
+    if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== src) fs.writeFileSync(dest, src, { mode: 0o755 });
+    const owner = (process as unknown as { parentPort?: unknown }).parentPort || process.env.MS_APP_DIR;
+    if (owner) fs.writeFileSync(path.join(APP_DIR, 'server.json'), JSON.stringify({ url: `http://127.0.0.1:${port}`, pid: process.pid }));
+  } catch (e) {
+    console.error('[agents] could not install the tower command', e);
+  }
+}
+
 /** Listen on `port`; if a preferred port is taken, fall back to a free one (port 0). */
 function listen(port: number): void {
   const onError = (e: NodeJS.ErrnoException) => {
@@ -382,6 +429,8 @@ function listen(port: number): void {
     const addr = server.address();
     const actual = typeof addr === 'object' && addr ? addr.port : port;
     console.log(`[multisession] http://127.0.0.1:${actual}`);
+    setServerUrl(`http://127.0.0.1:${actual}`);
+    installCli(actual);
     // Under Electron's utilityProcess the main process waits for this message to learn the port.
     const parentPort = (process as unknown as { parentPort?: { postMessage(m: unknown): void } }).parentPort;
     parentPort?.postMessage({ type: 'listening', port: actual });

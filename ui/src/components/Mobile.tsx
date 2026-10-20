@@ -307,6 +307,7 @@ function Row({ s, now, onOpen, onMenu }: { s: Session; now: number; onOpen: (s: 
         <span className="m-row-meta">
           <span>{s.project}</span>
           {s.gitBranch && s.gitBranch !== 'HEAD' && <span className="branch">{s.gitBranch}</span>}
+          {s.spawn && <span className="m-tag-todo" title={s.spawn.parentTitle ? `Started by ${s.spawn.parentTitle}` : undefined}>↳ {s.spawn.name}</span>}
           {s.todo && <span className={`m-tag-todo ${s.todo.status === 'done' ? 'done' : ''}`}>{s.todo.status === 'done' ? 'todo ✓' : 'todo'}</span>}
           {s.live && <LoopBadge session={s} />}
           {s.live && <ContextBadge session={s} />}

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
-import { TMUX_SOCKET, APP_DIR } from './config.js';
+import { TMUX_SOCKET, APP_DIR, SERVER_URL } from './config.js';
 import { shellEnv, shQuote } from './shell.js';
 
 const execFileP = promisify(execFile);
@@ -96,8 +96,11 @@ export async function createSession(name: string, cwd: string, command: string):
   await ensureServer();
   // Run through the login shell so PATH (nvm, homebrew) resolves the same as in a terminal.
   const shell = process.env.SHELL || '/bin/zsh';
-  const wrapped = `${shell} -lc ${shQuote(command)}`;
-  await tmux(['new-session', '-d', '-s', name, '-c', cwd, '-x', '220', '-y', '55', wrapped]);
+  // The `tower` command (server/agents.ts) is on PATH inside every session, and finds this server through TOWER_URL.
+  const bin = path.join(APP_DIR, 'bin');
+  const wrapped = `${shell} -lc ${shQuote(`export PATH=${shQuote(bin)}:"$PATH"; ${command}`)}`;
+  const env = SERVER_URL ? ['-e', `TOWER_URL=${SERVER_URL}`] : [];
+  await tmux(['new-session', '-d', '-s', name, '-c', cwd, '-x', '220', '-y', '55', ...env, wrapped]);
   await tmuxQuiet(['set-option', '-t', `=${name}`, 'remain-on-exit', 'on']);
 }
 

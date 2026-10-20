@@ -196,7 +196,13 @@ export function App() {
         const id = placementTarget(p, next.map((w) => ({ id: w.id, name: w.name, panes: w.panes.map((x) => x.tmux) })), (t) => byTmux.get(t)?.cwd);
         if (!id) continue;
         const pane = { tmux: p.tmux, agent: byTmux.get(p.tmux)!.agent, openedAt: Date.now() };
-        next = next.map((w) => (w.id === id ? { ...w, panes: [...w.panes, pane] } : w));
+        // An agent goes after its parent and the parent's earlier agents; anything else at the end.
+        const near = (w: Workspace) => p.after ? w.panes.reduce((at, x, i) => (x.tmux === p.after || byTmux.get(x.tmux)?.spawn?.parentTmux === p.after ? i : at), -1) : -1;
+        next = next.map((w) => {
+          if (w.id !== id) return w;
+          const i = near(w);
+          return { ...w, panes: i < 0 ? [...w.panes, pane] : [...w.panes.slice(0, i + 1), pane, ...w.panes.slice(i + 1)] };
+        });
       }
       return { workspaces: next };
     });
