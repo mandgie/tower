@@ -158,7 +158,7 @@ let dnsCache: { at: number; name: string } = { at: 0, name: '' };
 /** The Mac's MagicDNS name from the Tailscale CLI, if Tailscale is installed. */
 function tailscaleName(): Promise<string> {
   if (Date.now() - dnsCache.at < 60_000) return Promise.resolve(dnsCache.name);
-  const bins = ['/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale', '/usr/local/bin/tailscale'];
+  const bins = ['/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale', '/usr/local/bin/tailscale', '/usr/bin/tailscale'];
   const bin = bins.find((b) => fs.existsSync(b));
   if (!bin) return Promise.resolve('');
   return new Promise((resolve) => {

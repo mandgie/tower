@@ -37,10 +37,12 @@ export async function saveUpload(req: http.IncomingMessage): Promise<string> {
   const base = `${new Date().toISOString().slice(0, 10)}-${randomUUID().slice(0, 8)}`;
   let file = path.join(DIR, base + ext);
   fs.writeFileSync(file, Buffer.concat(chunks));
-  // The agents read PNG, JPEG, GIF and WebP; an iPhone photo can arrive as HEIC, which sips converts.
+  // The agents read PNG, JPEG, GIF and WebP; an iPhone photo can arrive as HEIC, which sips converts
+  // (heif-convert from libheif on a Linux host).
   if (ext === '.heic' || ext === '.heif') {
     const jpg = path.join(DIR, `${base}.jpg`);
-    await run('sips', ['-s', 'format', 'jpeg', file, '--out', jpg]);
+    if (process.platform === 'darwin') await run('sips', ['-s', 'format', 'jpeg', file, '--out', jpg]);
+    else await run('heif-convert', [file, jpg]);
     fs.rmSync(file, { force: true });
     file = jpg;
   }
