@@ -46,6 +46,8 @@ Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/node %h/tower/dist/server.cjs
 Restart=always
 RestartSec=3
+# The tmux server the Tower server starts holds the sessions; a restart or a deploy stops only Tower.
+KillMode=process
 
 [Install]
 WantedBy=default.target

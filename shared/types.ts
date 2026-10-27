@@ -42,6 +42,16 @@ export interface Session {
   loop?: SessionLoop;        // a /loop (or other scheduled prompt) armed in this live Claude process
   todo?: { id: string; title: string; status: TodoStatus };  // the todo this session was started for (server/todos.ts)
   spawn?: { name: string; parentKey?: string; parentTitle?: string; parentTmux?: string };  // another session started it with `tower spawn` (server/agents.ts)
+  host?: string;       // it runs on this other Tower server; its names carry `@host:` (shared/hosts.ts)
+}
+
+/** Another Tower server whose sessions this one shows (server/hosts.ts). */
+export interface HostInfo {
+  name: string;
+  url: string;         // its remote listener, e.g. http://tower-1.tailnet.ts.net:4311
+  online: boolean;
+  error?: string;      // why the last connection failed
+  seenAt?: number;     // last snapshot from it; sessions shown while offline are from then
 }
 
 /** What Claude's own scheduler will run next, read from ScheduleWakeup / CronCreate calls in the transcript. */
@@ -85,6 +95,7 @@ export interface Snapshot {
   todos?: Todo[];                   // todos found in the sessions of workspaces that have the todo finder on
   todoScans?: TodoScan[];           // the todo finder's state per workspace
   lost?: LostSession[];             // sessions the tmux server lost (the Mac shut down), waiting to be resumed
+  hosts?: HostInfo[];               // other Tower servers whose sessions are in this list
 }
 
 export interface ProjectDir { cwd: string; name: string }
@@ -106,6 +117,7 @@ export interface SnapshotDelta {
   todos?: Todo[];
   todoScans?: TodoScan[];
   lost?: LostSession[];
+  hosts?: HostInfo[];
 }
 
 export type SnapshotEvent = { t: 'full'; snapshot: Snapshot } | ({ t: 'delta' } & SnapshotDelta);

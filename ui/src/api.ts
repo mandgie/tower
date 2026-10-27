@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { applyDelta } from '../../shared/snapshot';
-import type { Snapshot, SnapshotEvent, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary, WorkspaceOp, WorkspaceOpRequest, Todo, TodoStatus } from '../../shared/types';
+import type { Snapshot, SnapshotEvent, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary, WorkspaceOp, WorkspaceOpRequest, Todo, TodoStatus, HostInfo } from '../../shared/types';
 
 /** Where the Mac should put a session the phone starts (see `Placement`); absent on the desktop, which opens its own panes. */
 export interface Place { workspace?: string }
@@ -44,6 +44,9 @@ export const api = {
   saveWorkspaces: (w: WorkspaceSummary[]) => j<{ ok: true }>('/api/workspaces', { method: 'PUT', body: JSON.stringify(w) }),
   remote: () => j<RemoteInfo>('/api/remote'),
   rotateRemote: () => j<RemoteInfo>('/api/remote/rotate', { method: 'POST' }),
+  hosts: () => j<HostInfo[]>('/api/hosts'),
+  addHost: (pairUrl: string, name?: string) => j<HostInfo>('/api/hosts', { method: 'POST', body: JSON.stringify({ pairUrl, name }) }),
+  removeHost: (name: string) => j<{ ok: true }>(`/api/hosts/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   setTodo: (id: string, status: TodoStatus) => j<Todo>(`/api/todos/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ status }) }),
   removeWorktree: (id: string, force = false) => j<Todo>(`/api/todos/${encodeURIComponent(id)}/worktree${force ? '?force=1' : ''}`, { method: 'DELETE' }),
   dismissFinish: (id: string) => j<Todo>(`/api/todos/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ dismissFinish: true }) }),
