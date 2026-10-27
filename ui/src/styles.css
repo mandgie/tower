@@ -316,6 +316,14 @@ details summary::-webkit-details-marker { display: none; }
 .remote-url { display: block; padding: 5px 8px; background: var(--ink); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; font-size: 11.5px; }
 .remote-unpair { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .remote-unpair-btn { align-self: flex-start; margin-left: -8px; }
+.hosts { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.host-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.host-dot { flex: 0 0 7px; height: 7px; border-radius: 50%; background: var(--line); }
+.host-dot.on { background: var(--codex); box-shadow: 0 0 6px rgba(127,224,200,0.5); }
+.host-name { font-family: var(--font-mono); font-size: 12px; }
+.host-state { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-add { display: flex; gap: 8px; }
+.host-add input { flex: 1; min-width: 0; font-size: 12px; }
 /* ---------- doctor (setup check) ---------- */
 .doctor-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; background: var(--ink); overflow: hidden; }
 .doctor-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-bottom: 1px solid var(--line); }

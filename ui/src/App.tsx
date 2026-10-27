@@ -484,7 +484,7 @@ export function App() {
           </div>
         </main>
       </div>
-      {newOpen && <NewSession preset={newOpen} projects={snapshot?.projects ?? []} onClose={() => setNewOpen(null)} onLaunch={launch} />}
+      {newOpen && <NewSession preset={newOpen} projects={snapshot?.projects ?? []} hosts={snapshot?.hosts} onClose={() => setNewOpen(null)} onLaunch={launch} />}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} onDoctor={() => { setSettingsOpen(false); setDoctorOpen(true); }} />}
       {doctorOpen && <Doctor initial={doctor} onClose={() => setDoctorOpen(false)} />}
       {error && <div className="toast" role="alert">{error}</div>}

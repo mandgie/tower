@@ -132,7 +132,7 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
       {sheetSession && <SessionSheet s={sheetSession} workspaces={workspaces} onClose={() => setSheet(null)}
         onKilled={() => { setSheet(null); if (key === sheetSession.key) go(null); }} />}
       {sheetWorkspace && <WorkspaceSheet w={sheetWorkspace} onClose={() => setSheet(null)} />}
-      {newOpen && <NewSession preset={scope?.cwd ? { cwd: scope.cwd } : {}} projects={snapshot?.projects ?? []} onClose={() => setNewOpen(false)} onLaunch={launch} mobile />}
+      {newOpen && <NewSession preset={scope?.cwd ? { cwd: scope.cwd } : {}} projects={snapshot?.projects ?? []} hosts={snapshot?.hosts} onClose={() => setNewOpen(false)} onLaunch={launch} mobile />}
     </div>
   );
 }

@@ -49,6 +49,7 @@ export function applyDelta(prev: Snapshot, d: SnapshotDelta): Snapshot {
     todos: d.todos ?? prev.todos,
     todoScans: d.todoScans ?? prev.todoScans,
     lost: d.lost ?? prev.lost,
+    hosts: d.hosts ?? prev.hosts,
   };
 }
 

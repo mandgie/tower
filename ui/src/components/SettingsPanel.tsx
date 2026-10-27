@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Settings } from '../../../shared/types';
 import { api } from '../api';
 import { RemoteAccess } from './RemoteAccess';
+import { Hosts } from './Hosts';
 
 export function SettingsPanel({ onClose, onDoctor }: { onClose: () => void; onDoctor?: () => void }) {
   const [s, setS] = useState<Settings | null>(null);
@@ -26,6 +27,7 @@ export function SettingsPanel({ onClose, onDoctor }: { onClose: () => void; onDo
         <label className="check"><input type="checkbox" checked={s.trustFolders} onChange={(e) => setS({ ...s, trustFolders: e.target.checked })} />
           Trust every folder Claude starts in <span className="muted">(skips “Do you trust this folder?”)</span></label>
         <RemoteAccess s={s} onChange={(patch) => setS({ ...s, ...patch })} />
+        <Hosts />
         {!window.multisession && (
           <label className="check"><input type="checkbox" checked={localStorage.getItem('ms.layout') === 'mobile'}
             onChange={(e) => { localStorage.setItem('ms.layout', e.target.checked ? 'mobile' : 'desktop'); location.reload(); }} />

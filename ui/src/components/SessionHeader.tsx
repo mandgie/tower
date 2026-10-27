@@ -4,12 +4,13 @@ import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
 import { LoopBadge } from './LoopBadge';
 import { TodoBadge } from './Workspace';
+import { displayAddr, splitHost } from '../../../shared/hosts';
 
 export function SessionHeader({ session: s, onResume, onFork, onKill, onTodo }: {
   session: Session; onResume?: () => void; onFork?: () => void; onKill?: () => void; onTodo?: (id: string) => void;
 }) {
-  const home = '~';
-  const cwd = s.cwd.replace(/^\/Users\/[^/]+/, home);
+  const cwd = displayAddr(s.cwd);
+  const id = splitHost(s.id)?.name ?? s.id;
   const external = s.live?.kind === 'external';
   const [confirm, setConfirm] = useState(false);
   useEffect(() => { if (!confirm) return; const t = setTimeout(() => setConfirm(false), 4000); return () => clearTimeout(t); }, [confirm]);
@@ -33,7 +34,7 @@ export function SessionHeader({ session: s, onResume, onFork, onKill, onTodo }: 
           <ContextBadge session={s} />
           <LoopBadge session={s} />
           {s.agentName && <span className="mono">{s.agentName}</span>}
-          <span className="mono dim" title="Session id" onClick={() => navigator.clipboard?.writeText(s.id)} style={{ cursor: 'copy' }}>{s.id.slice(0, 8)}</span>
+          <span className="mono dim" title="Session id" onClick={() => navigator.clipboard?.writeText(id)} style={{ cursor: 'copy' }}>{id.slice(0, 8)}</span>
         </div>
       </div>
       <div className="head-actions">
