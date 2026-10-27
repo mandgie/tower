@@ -149,6 +149,8 @@ export interface Todo {
   closed?: { at: number; by: 'session' | 'git'; reason: string; quote?: string; from: TodoStatus; dismissed?: boolean };
   /** Found, but hidden until its session moves on (server/todos.ts releaseHeld). The UI never gets a held todo. */
   held?: { file: string };
+  /** Something nobody committed to but that matters (server/todos.ts). Shown as a todo; a proposed one expires after a week. */
+  insight?: boolean;
 }
 
 /** The git worktree startTodo made for a todo's session, and what the cleanup in server/todos.ts last saw in it. */

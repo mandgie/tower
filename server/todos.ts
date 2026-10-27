@@ -37,6 +37,9 @@ const MAX_TODOS_PER_SESSION = 2;
 const HOLD_MS = 60 * 60_000;
 /** Show a held todo after this long anyway, also when its session is never read again. */
 const MAX_HOLD_MS = 24 * 3600_000;
+/** Insights: at most this many per scan, and one that nobody accepts goes away after INSIGHT_TTL_MS. */
+const MAX_INSIGHTS_PER_SESSION = 1;
+const INSIGHT_TTL_MS = 7 * 86_400_000;
 const RUN_TIMEOUT_MS = 4 * 60_000;
 
 interface Store { todos: Todo[]; marks: Record<string, number> }
@@ -394,6 +397,14 @@ function releaseHeld(sessions: Session[], now: number): void {
       changed = true;
     }
   }
+  // An insight nobody took up is old news; rejecting it keeps the finder from proposing it again.
+  for (const t of store.todos) {
+    if (t.insight && !t.held && t.status === 'proposed' && now - t.createdAt >= INSIGHT_TTL_MS) {
+      t.status = 'rejected';
+      t.decidedAt = now;
+      changed = true;
+    }
+  }
   if (changed) { save(); onChange(); }
 }
 
@@ -498,13 +509,17 @@ async function scanSession(workspace: string, s: Session): Promise<void> {
       if (t.held) store.todos.splice(store.todos.indexOf(t), 1);
       else closeTodo(t, 'session', c.reason, c.quote);
     }
-    for (const f of found.todos.slice(0, MAX_TODOS_PER_SESSION)) {
+    const picked = [
+      ...found.todos.filter((f) => f.kind !== 'insight').slice(0, MAX_TODOS_PER_SESSION),
+      ...found.todos.filter((f) => f.kind === 'insight').slice(0, MAX_INSIGHTS_PER_SESSION),
+    ];
+    for (const f of picked) {
       // The quote is the proof; a todo whose quote is not in the turns is the model's invention.
       if (!f.title.trim() || !haystack.includes(normalize(f.quote).slice(0, 60))) continue;
       store.todos.push({
         id: randomUUID(), workspace, session: s.key, sessionTitle: s.title || s.firstPrompt.slice(0, 80), cwd,
         title: f.title.trim(), detail: f.detail.trim(), quote: f.quote.trim(), createdAt: Date.now(), status: 'proposed',
-        held: { file },
+        held: { file }, ...(f.kind === 'insight' ? { insight: true } : {}),
       });
     }
   }
@@ -573,8 +588,8 @@ A todo is a concrete piece of work that the developer committed to and that is s
 - A test, build, check or command failed, and the conversation does not show a fix.
 
 Do not report:
-- Suggestions, options, offers or ideas from CLAUDE ("Next steps", "I can also …", "You may want to …", "Consider …", "Do you want me to …"), even when they are good and even when the USER did not answer them. Report one only when the USER said to do it later.
-- Risks, bugs or improvements that CLAUDE noticed outside the task, unless the USER said to do something about them later.
+- Suggestions, options, offers or ideas from CLAUDE ("Next steps", "I can also …", "You may want to …", "Consider …", "Do you want me to …"), even when they are good and even when the USER did not answer them. Report one only when the USER said to do it later, or when it is an insight (below).
+- Risks, bugs or improvements that CLAUDE noticed outside the task, unless the USER said to do something about them later, or they are an insight (below).
 - Work that a later part of the conversation does, asks for, or starts.
 - Vague ideas, general advice, or questions without a concrete action.
 - Anything that matches an open todo or an earlier todo in the lists, even with other words.
@@ -585,7 +600,15 @@ Write each todo for the developer, who will read it days later without the conve
 - detail: one or two sentences: why it is open and what "done" means.
 - quote: the exact words from the conversation that show the todo is open, copied character for character, 5 to 30 words.
 
-Return at most ${MAX_TODOS_PER_SESSION} todos, the most important first. Return an empty list when nothing is open; that is the usual answer. A missed todo costs little; a todo the developer did not want costs their attention.
+Besides these, you may report one insight (kind "insight"): something nobody committed to, but that the developer would regret not knowing in a week. It can come from what CLAUDE noticed, suggested or found, or from what the conversation shows without anyone saying it. It qualifies only when ignoring it has a high, concrete cost:
+- a password, key or token exposed, or personal data stored or shared where it should not be;
+- something left running or switched on that costs money or risks production;
+- a deadline or date that is easy to miss;
+- data loss, a security hole, or a bug that will hit users;
+- a decision the developer must make that blocks other work.
+It does not qualify when it is a nice-to-have: more tests, refactors, monitoring, alarms, pipelines, tooling, docs, performance, cleanup, or a better process. Most conversations have no insight; then report none.
+
+Return at most ${MAX_TODOS_PER_SESSION} todos (kind "todo") and at most ${MAX_INSIGHTS_PER_SESSION} insight, the most important first. Return an empty list when nothing is open; that is the usual answer. A missed todo costs little; a todo the developer did not want costs their attention.
 
 Then check the open todos (T1, T2, …). Todos go stale fast: the same conversation often does the work a few minutes after a todo was found, or a commit does it. Put a todo in "closed" only when the conversation or the recent commits show that:
 - the work is done (for example CLAUDE reports that it committed, fixed, ran or removed the thing), or
@@ -604,8 +627,8 @@ const SCHEMA = JSON.stringify({
       type: 'array',
       items: {
         type: 'object',
-        properties: { title: { type: 'string' }, detail: { type: 'string' }, quote: { type: 'string' } },
-        required: ['title', 'detail', 'quote'],
+        properties: { kind: { type: 'string', enum: ['todo', 'insight'] }, title: { type: 'string' }, detail: { type: 'string' }, quote: { type: 'string' } },
+        required: ['kind', 'title', 'detail', 'quote'],
         additionalProperties: false,
       },
     },
@@ -623,7 +646,7 @@ const SCHEMA = JSON.stringify({
   additionalProperties: false,
 });
 
-interface Found { title: string; detail: string; quote: string }
+interface Found { kind: 'todo' | 'insight'; title: string; detail: string; quote: string }
 interface Closed { n: number; reason: string; quote: string }
 
 /** The repository's commits since the oldest open todo (at most a week back), one subject per line. */
@@ -659,7 +682,7 @@ async function ask(s: Session, text: string, open: Todo[], past: Todo[], commits
   const closed = Array.isArray(j.structured_output?.closed) ? j.structured_output.closed : [];
   return {
     todos: todos.filter((t: any) => t && typeof t.title === 'string' && typeof t.quote === 'string')
-      .map((t: any) => ({ title: t.title, detail: typeof t.detail === 'string' ? t.detail : '', quote: t.quote })),
+      .map((t: any) => ({ kind: t.kind === 'insight' ? 'insight' as const : 'todo' as const, title: t.title, detail: typeof t.detail === 'string' ? t.detail : '', quote: t.quote })),
     closed: closed.filter((c: any) => c && Number.isInteger(c.n) && typeof c.reason === 'string' && typeof c.quote === 'string'),
   };
 }
