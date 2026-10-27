@@ -5,6 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import type { Agent } from '../../../shared/types';
 import { wsUrl } from '../api';
+import { useDragScroll } from './dragScroll';
 
 /** Hand a clicked link to Electron (default browser). Outside Electron fall back to a new tab. */
 function openLink(uri: string) {
@@ -35,6 +36,10 @@ export const TerminalPane = memo(function TerminalPane({ tmux, active, agent, fo
   const wsRef = useRef<WebSocket | null>(null);
   const [state, setState] = useState<'connecting' | 'open' | 'closed'>('connecting');
   const [gen, setGen] = useState(0);
+  // xterm has no touch scrolling, and tmux or the agent owns the scrollback anyway: drags on an iPad or phone go
+  // to the pane, a text line per line of drag. A mouse wheel or trackpad still goes through xterm.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useDragScroll(wrapRef, tmux, { active: true, edges: false, wheel: false, step: () => fontSize * 1.2 });
 
   useEffect(() => {
     const host = hostRef.current!;
@@ -144,7 +149,7 @@ export const TerminalPane = memo(function TerminalPane({ tmux, active, agent, fo
   }, [active]);
 
   return (
-    <div className="term-wrap">
+    <div className="term-wrap" ref={wrapRef}>
       <div className="term-host" ref={hostRef} />
       {state === 'closed' && (
         <div className="term-overlay">

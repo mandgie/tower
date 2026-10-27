@@ -29,7 +29,7 @@ export function SettingsPanel({ onClose, onDoctor }: { onClose: () => void; onDo
         {!window.multisession && (
           <label className="check"><input type="checkbox" checked={localStorage.getItem('ms.layout') === 'mobile'}
             onChange={(e) => { localStorage.setItem('ms.layout', e.target.checked ? 'mobile' : 'desktop'); location.reload(); }} />
-            Use the phone layout in this browser</label>
+            Use the touch layout (phone and iPad) in this browser</label>
         )}
         <p className="muted small">Sessions live in tmux socket <code>multisession</code>. From any terminal: <code>tmux -L multisession attach</code>.</p>
         <div className="modal-actions">

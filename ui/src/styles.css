@@ -34,6 +34,7 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .mono { font-family: var(--font-mono); font-size: 11.5px; }
 
 .app { display: flex; flex-direction: column; height: 100%; }
+html.kb-open .app { height: var(--vvh); }
 .body { display: flex; flex: 1; min-height: 0; }
 
 /* ---------- status strip (the "tower") ---------- */
@@ -230,7 +231,7 @@ kbd { font: 11px var(--font-mono); color: var(--mist); background: rgba(255,255,
 .m-row-meta .loop-text { overflow: hidden; text-overflow: ellipsis; }
 .m-row-meta .loop ~ .ctx { display: none; }
 
-.term-wrap { position: absolute; inset: 4px 2px 2px 6px; }
+.term-wrap { position: absolute; inset: 4px 2px 2px 6px; touch-action: none; }
 .term-host { width: 100%; height: 100%; }
 .xterm .xterm-viewport { scrollbar-width: thin; }
 .term-overlay { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; background: rgba(15,20,24,0.75); text-align: center; }
@@ -602,3 +603,27 @@ button.todo-check:hover { border-color: var(--codex); background: rgba(127,224,2
 .todos-phone .todos-off { font-size: 14px; }
 .todo-source-ws { color: var(--mist); font-weight: 500; margin-right: 2px; white-space: nowrap; flex: 0 0 auto; }
 .todo-source-ws::after { content: ' ·'; color: var(--dim); }
+
+/* ---------- tablet: the phone layout with the list beside the session (components/Mobile.tsx) ---------- */
+.m-split { flex-direction: row; }
+.m-side { width: 340px; flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+.m-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; container-type: inline-size; }
+.m-split .m-side .m-top { padding-left: max(16px, env(safe-area-inset-left)); }
+.m-split .m-side .m-scroll { padding-left: env(safe-area-inset-left); }
+.m-split .m-main .m-top { padding-right: max(16px, env(safe-area-inset-right)); }
+.m-split .m-main .m-dock { padding-right: max(12px, env(safe-area-inset-right)); }
+.m-split .m-top-session.no-back { padding-left: 16px; }
+.m-row.on { background: var(--raised); }
+.m-row.on .m-row-title { color: #FFFFFF; }
+.m-todos-btn.on { background: var(--fog); color: var(--ink); }
+.m-split .m-tabs { align-self: flex-start; min-width: 360px; }
+.m-split .m-chat .transcript { padding: 12px 24px 20px; }
+.m-split .m-screen-text { font-size: 13px; margin: 8px 16px 0; }
+.m-split .m-table { font-size: max(8px, min(13px, calc((100cqw - 56px) / var(--cols) / 0.61))); }
+/* Sheets and the new session dialog float in the middle instead of spanning the whole width. */
+.m-split .m-sheet-back { align-items: center; justify-content: center; }
+.m-split .m-sheet { width: 480px; max-width: calc(100% - 48px); border: 1px solid var(--line); border-radius: 16px; padding-bottom: 12px; box-shadow: 0 30px 80px rgba(0,0,0,0.5); }
+.m-split .m-sheet-grip { display: none; }
+.m-split .m-sheet-head { padding-top: 8px; }
+.m-split .m-modal { place-items: center; }
+.m-split .m-modal .modal { width: 560px; max-width: calc(100% - 48px); max-height: calc(100% - 48px); border-width: 1px; border-radius: 16px; padding-bottom: 18px; }

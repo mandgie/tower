@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { Agent, Session, Snapshot, TodoScan, WorkspaceSummary, WorkspaceOpRequest } from '../../../shared/types';
 import { placementTarget, applyWorkspaceOp } from '../../../shared/snapshot';
 import { api, relTime, useNow, useSnapshot, usePresent, useViewing, type LaunchBody } from '../api';
@@ -7,6 +7,8 @@ import { ContextBadge } from './ContextBadge';
 import { LoopBadge } from './LoopBadge';
 import { Transcript } from './Transcript';
 import { TerminalPane } from './Terminal';
+import { useDragScroll } from './dragScroll';
+import { useVisualViewportHeight } from './viewport';
 import { NewSession } from './NewSession';
 import { TodoPanel } from './TodoPanel';
 
@@ -14,7 +16,7 @@ import { TodoPanel } from './TodoPanel';
  * The phone layout: a list of sessions with the ones waiting for you on top, and a single-session view
  * with the conversation, the pane's live screen, or a full terminal, plus a composer and a row of keys
  * for menus and permission prompts. The session being viewed lives in the URL hash so the iOS back
- * swipe works.
+ * swipe works. On a tablet the two sit side by side: the list on the left, the session on the right.
  */
 
 const LAYOUT_KEY = 'ms.layout';
@@ -24,25 +26,32 @@ const RECENT_PAGE = 12;
 /** The hash key of the todo screen; session keys never start with a colon. */
 const TODOS = ':todos';
 
-/** Phone layout by default on a narrow screen outside Electron; either can be forced per device. */
-export function useMobileLayout(): [boolean, (v: 'mobile' | 'desktop') => void] {
-  const query = '(max-width: 760px)';
-  const [pref, setPref] = useState(() => localStorage.getItem(LAYOUT_KEY));
-  const [narrow, setNarrow] = useState(() => matchMedia(query).matches);
+function useMedia(query: string) {
+  const [on, setOn] = useState(() => matchMedia(query).matches);
   useEffect(() => {
     const mq = matchMedia(query);
-    const on = () => setNarrow(mq.matches);
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
-  }, []);
+    const change = () => setOn(mq.matches);
+    mq.addEventListener('change', change);
+    return () => mq.removeEventListener('change', change);
+  }, [query]);
+  return on;
+}
+
+/** Touch layout by default on a narrow screen outside Electron; either can be forced per device. */
+export function useMobileLayout(): [boolean, (v: 'mobile' | 'desktop') => void] {
+  const [pref, setPref] = useState(() => localStorage.getItem(LAYOUT_KEY));
+  const narrow = useMedia('(max-width: 760px)');
   const set = (v: 'mobile' | 'desktop') => { localStorage.setItem(LAYOUT_KEY, v); setPref(v); };
   if (window.multisession) return [false, set];
   return [pref ? pref === 'mobile' : narrow, set];
 }
 
+/** Room for the list beside the session (an iPad set to the touch layout), but not a phone on its side or an iPad in Split View. */
+const useSplit = () => useMedia('(min-width: 761px) and (min-height: 600px)');
+
 let pushedHash = false;
 
-function useHashKey(): [string | null, (key: string | null) => void] {
+function useHashKey(): [string | null, (key: string | null, replace?: boolean) => void] {
   const read = () => {
     if (location.hash === '#/todos') return TODOS;
     const m = location.hash.match(/^#\/s\/(.+)$/); return m ? decodeURIComponent(m[1]) : null;
@@ -54,43 +63,15 @@ function useHashKey(): [string | null, (key: string | null) => void] {
     return () => window.removeEventListener('hashchange', on);
   }, []);
   // Back pops the entry the app pushed, so the browser's own back gesture and the ‹ button agree.
-  const go = (k: string | null) => {
-    if (k) { pushedHash = true; location.hash = k === TODOS ? '#/todos' : `#/s/${encodeURIComponent(k)}`; }
+  // With `replace`, the new key takes the current entry, so switching sessions side by side does not pile up history.
+  const go = (k: string | null, replace = false) => {
+    const hash = k && (k === TODOS ? '#/todos' : `#/s/${encodeURIComponent(k)}`);
+    if (hash && replace) { history.replaceState(null, '', location.pathname + location.search + hash); setKey(k); }
+    else if (hash) { pushedHash = true; location.hash = hash; }
     else if (pushedHash) { pushedHash = false; history.back(); }
     else { history.replaceState(null, '', location.pathname + location.search); setKey(null); }
   };
   return [key, go];
-}
-
-/**
- * iOS keeps the layout viewport when the keyboard opens; size the app to the visible part instead, and say so
- * with `kb-open` so the dock can drop the home-bar inset the keyboard covers.
- */
-function useVisualViewportHeight() {
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const root = document.documentElement;
-    // A Home Screen app shrinks innerHeight with the keyboard too, so compare against the tallest height seen
-    // at this width instead (reset on rotation). Pinch zoom shrinks vv.height as well; scale undoes that.
-    let full = 0, width = 0;
-    const on = () => {
-      if (vv.width * vv.scale !== width) { width = vv.width * vv.scale; full = 0; }
-      full = Math.max(full, window.innerHeight, vv.height * vv.scale);
-      const kb = vv.height * vv.scale < full - 80;
-      root.classList.toggle('kb-open', kb);
-      if (kb) root.style.setProperty('--vvh', `${vv.height}px`);
-      else root.style.removeProperty('--vvh');
-      if (vv.offsetTop) window.scrollTo(0, 0);
-    };
-    on();
-    vv.addEventListener('resize', on);
-    vv.addEventListener('scroll', on);
-    return () => {
-      vv.removeEventListener('resize', on); vv.removeEventListener('scroll', on);
-      root.classList.remove('kb-open'); root.style.removeProperty('--vvh');
-    };
-  }, []);
 }
 
 const skipPerms = () => localStorage.getItem('ms.skipPerms') !== '0';
@@ -98,6 +79,7 @@ const skipPerms = () => localStorage.getItem('ms.skipPerms') !== '0';
 export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   const { snapshot, connected } = useSnapshot();
   const [key, go] = useHashKey();
+  const split = useSplit();
   const [newOpen, setNewOpen] = useState(false);
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [filter, setFilterState] = useState(() => localStorage.getItem(FILTER_KEY) || 'all');
@@ -125,16 +107,28 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
     const place = scope?.id === 'other' ? undefined : { workspace: scope?.id };
     const r = await api.launch({ ...body, place });
     setNewOpen(false);
-    if (r.key) go(r.key);
+    if (r.key) open(r.key);
   };
+  // Side by side, the list stays put and picking another session replaces the one shown.
+  const open = (k: string) => go(k, split && !!key);
+
+  const list = (
+    <SessionList sessions={sessions} scopes={scopes} scope={scope} onScope={setFilter} loaded={!!snapshot} connected={connected} onOpen={(s) => open(s.key)} onMenu={menuFor} onScopeMenu={(id) => setSheet({ kind: 'workspace', id })} onNew={() => setNewOpen(true)} onDesktop={onDesktop}
+      todos={todoView.on.length ? todoView.todos.filter((t) => t.status === 'proposed').length : null} onTodos={() => open(TODOS)} selected={split ? key : null} />
+  );
+  const detail = key === TODOS ? <TodoScreen view={todoView} sessions={sessions} connected={connected} onOpen={(s) => open(s.key)} onBack={() => go(null)} />
+    : key && session ? <SessionView s={session} connected={connected} onBack={split ? undefined : () => go(null)} onMenu={() => menuFor(session)} wide={split} />
+    : key && snapshot ? <div className="m-empty"><p>That session is gone.</p><button className="btn" onClick={() => go(null)}>Back to the list</button></div>
+    : null;
 
   return (
-    <div className="m-app">
-      {key === TODOS ? <TodoScreen view={todoView} sessions={sessions} connected={connected} onOpen={(s) => go(s.key)} onBack={() => go(null)} />
-        : key && session ? <SessionView s={session} connected={connected} onBack={() => go(null)} onMenu={() => menuFor(session)} />
-        : key && snapshot ? <div className="m-empty"><p>That session is gone.</p><button className="btn" onClick={() => go(null)}>Back to the list</button></div>
-        : <SessionList sessions={sessions} scopes={scopes} scope={scope} onScope={setFilter} loaded={!!snapshot} connected={connected} onOpen={(s) => go(s.key)} onMenu={menuFor} onScopeMenu={(id) => setSheet({ kind: 'workspace', id })} onNew={() => setNewOpen(true)} onDesktop={onDesktop}
-          todos={todoView.on.length ? todoView.todos.filter((t) => t.status === 'proposed').length : null} onTodos={() => go(TODOS)} />}
+    <div className={`m-app ${split ? 'm-split' : ''}`}>
+      {split ? (
+        <>
+          <aside className="m-side">{list}</aside>
+          <main className="m-main">{detail ?? <div className="m-empty"><p>{snapshot ? 'Pick a session on the left.' : 'Reading sessions…'}</p></div>}</main>
+        </>
+      ) : detail ?? list}
       {sheetSession && <SessionSheet s={sheetSession} workspaces={workspaces} onClose={() => setSheet(null)}
         onKilled={() => { setSheet(null); if (key === sheetSession.key) go(null); }} />}
       {sheetWorkspace && <WorkspaceSheet w={sheetWorkspace} onClose={() => setSheet(null)} />}
@@ -228,12 +222,13 @@ function Chip({ id, name, live, done, on, onScope, onMenu }: {
 
 // ---- list ------------------------------------------------------------------------------------
 
-function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOpen, onMenu, onScopeMenu, onNew, onDesktop, todos, onTodos }: {
+function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOpen, onMenu, onScopeMenu, onNew, onDesktop, todos, onTodos, selected }: {
   sessions: Session[]; scopes: Scope[]; scope: Scope | null; onScope: (id: string) => void;
   loaded: boolean; connected: boolean; onOpen: (s: Session) => void; onMenu: (s: Session) => void; onScopeMenu: (id: string) => void;
   onNew: () => void; onDesktop: () => void;
   todos: number | null;  // proposals waiting in the chip's workspaces; null when no workspace finds todos
   onTodos: () => void;
+  selected: string | null;  // the session shown beside the list
 }) {
   const now = useNow();
   const [recentShown, setRecentShown] = useState(RECENT_PAGE);
@@ -264,7 +259,7 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
           {groups.working.length > 0 && <span className="sum-work">{groups.working.length} working</span>}
         </span>
         {todos !== null && (
-          <button className="m-todos-btn" onClick={onTodos} aria-label={todos ? `Todos, ${todos} proposed` : 'Todos'}>
+          <button className={`m-todos-btn ${selected === TODOS ? 'on' : ''}`} onClick={onTodos} aria-label={todos ? `Todos, ${todos} proposed` : 'Todos'}>
             Todos{todos > 0 && <span className="m-todos-n">{todos}</span>}
           </button>
         )}
@@ -273,12 +268,12 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
       <ScopeChips scopes={scopes} scope={scope} total={total} onScope={onScope} onMenu={onScopeMenu} />
       <div className="m-scroll">
         {!loaded && <div className="m-note">Reading sessions…</div>}
-        <Group title="Needs you" rows={groups.done} now={now} onOpen={onOpen} onMenu={onMenu} />
-        <Group title="Working" rows={groups.working} now={now} onOpen={onOpen} onMenu={onMenu} />
-        <Group title="Looping" rows={groups.looping} now={now} onOpen={onOpen} onMenu={onMenu} />
-        <Group title="Open" rows={groups.open} now={now} onOpen={onOpen} onMenu={onMenu} />
+        <Group title="Needs you" rows={groups.done} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
+        <Group title="Working" rows={groups.working} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
+        <Group title="Looping" rows={groups.looping} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
+        <Group title="Open" rows={groups.open} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
         {loaded && !groups.done.length && !groups.working.length && !groups.looping.length && !groups.open.length && <div className="m-note">{scope ? `Nothing running in ${scope.name}.` : 'No live sessions.'} Resume one below or start a new one with +.</div>}
-        <Group title={scope && scope.id !== 'other' ? `Recent in ${scope.name}` : 'Recent'} rows={groups.recent.slice(0, recentShown)} now={now} onOpen={onOpen} onMenu={onMenu} />
+        <Group title={scope && scope.id !== 'other' ? `Recent in ${scope.name}` : 'Recent'} rows={groups.recent.slice(0, recentShown)} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
         {groups.recent.length > recentShown && <button className="btn ghost wide" onClick={() => setRecentShown((n) => n + RECENT_PAGE * 2)}>Show more</button>}
         <button className="m-layout-link" onClick={onDesktop}>Use the desktop layout</button>
       </div>
@@ -286,21 +281,21 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
   );
 }
 
-function Group({ title, rows, now, onOpen, onMenu }: { title: string; rows: Session[]; now: number; onOpen: (s: Session) => void; onMenu: (s: Session) => void }) {
+function Group({ title, rows, now, selected, onOpen, onMenu }: { title: string; rows: Session[]; now: number; selected: string | null; onOpen: (s: Session) => void; onMenu: (s: Session) => void }) {
   if (!rows.length) return null;
   return (
     <section className="m-group">
       <h3>{title}<span>{rows.length}</span></h3>
-      {rows.map((s) => <Row key={s.key} s={s} now={now} onOpen={onOpen} onMenu={tmuxOf(s) ? onMenu : undefined} />)}
+      {rows.map((s) => <Row key={s.key} s={s} now={now} on={s.key === selected} onOpen={onOpen} onMenu={tmuxOf(s) ? onMenu : undefined} />)}
     </section>
   );
 }
 
 /** A session row; a long press on one running in Tower opens its actions. */
-function Row({ s, now, onOpen, onMenu }: { s: Session; now: number; onOpen: (s: Session) => void; onMenu?: (s: Session) => void }) {
+function Row({ s, now, on, onOpen, onMenu }: { s: Session; now: number; on: boolean; onOpen: (s: Session) => void; onMenu?: (s: Session) => void }) {
   const press = useLongPress(onMenu ? () => onMenu(s) : undefined);
   return (
-    <button className={`m-row agent-${s.agent} status-${s.status} ${s.live ? 'live' : ''}`} onClick={() => onOpen(s)} {...press}>
+    <button className={`m-row agent-${s.agent} status-${s.status} ${s.live ? 'live' : ''} ${on ? 'on' : ''}`} aria-current={on || undefined} onClick={() => onOpen(s)} {...press}>
       <span className="rail" />
       <span className="m-row-main">
         <span className="m-row-title">{s.title || 'Untitled'}</span>
@@ -523,7 +518,8 @@ function WorkspaceSheet({ w, onClose }: { w: Scope; onClose: () => void }) {
 
 type Tab = 'chat' | 'screen' | 'term';
 
-function SessionView({ s, connected, onBack, onMenu }: { s: Session; connected: boolean; onBack: () => void; onMenu: () => void }) {
+/** `onBack` is left out beside the list, which is the way back there. */
+function SessionView({ s, connected, onBack, onMenu, wide }: { s: Session; connected: boolean; onBack?: () => void; onMenu: () => void; wide: boolean }) {
   const tmux = s.live?.kind === 'tmux' && !s.live.dead ? s.live.tmux : null;
   const [tab, setTab] = useState<Tab>(() => localStorage.getItem(TAB_KEY) === 'screen' ? 'screen' : 'chat');
   const shown: Tab = !tmux && tab !== 'chat' ? 'chat' : tab;
@@ -541,10 +537,12 @@ function SessionView({ s, connected, onBack, onMenu }: { s: Session; connected: 
 
   return (
     <div className={`m-screen agent-${s.agent}`}>
-      <header className="m-top m-top-session">
-        <button className="m-back" onClick={onBack} aria-label="Back">
-          <svg width="12" height="20" viewBox="0 0 12 20" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2 2 10l8 8" /></svg>
-        </button>
+      <header className={`m-top m-top-session ${onBack ? '' : 'no-back'}`}>
+        {onBack && (
+          <button className="m-back" onClick={onBack} aria-label="Back">
+            <svg width="12" height="20" viewBox="0 0 12 20" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2 2 10l8 8" /></svg>
+          </button>
+        )}
         <div className="m-title">
           <span className="m-title-main">{s.title || 'Untitled'}</span>
           <span className="m-title-sub">
@@ -571,7 +569,7 @@ function SessionView({ s, connected, onBack, onMenu }: { s: Session; connected: 
       <div className="m-body">
         {shown === 'chat' && <div className="m-chat"><Transcript session={s} compact /></div>}
         {shown === 'screen' && tmux && <Screen tmux={tmux} />}
-        {shown === 'term' && tmux && <TermTab tmux={tmux} agent={s.agent} />}
+        {shown === 'term' && tmux && <TermTab tmux={tmux} agent={s.agent} fontSize={wide ? 13 : 11} />}
       </div>
       {tmux ? <Dock tmux={tmux} keysOnly={shown === 'term'} />
         : (
@@ -586,62 +584,6 @@ function SessionView({ s, connected, onBack, onMenu }: { s: Session; connected: 
         )}
     </div>
   );
-}
-
-/**
- * Turns vertical touch drags and wheel input on `ref` into pane scroll steps, since a touch screen never
- * sends the wheel events a full-screen agent scrolls on. With `edges`, the element scrolls natively
- * first and only a drag past its top or bottom goes to the pane.
- */
-function useDragScroll(ref: RefObject<HTMLElement>, tmux: string, opts: { active: boolean; edges: boolean; after?: (lines: number) => void; step?: () => number }) {
-  const after = useRef(opts.after);
-  after.current = opts.after;
-  const step = useRef(opts.step);
-  step.current = opts.step;
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || !opts.active) return;
-    let lastX = 0, lastY = 0, acc = 0, pending = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const flush = () => {
-      timer = undefined;
-      const n = pending; pending = 0;
-      if (n) api.scroll(tmux, n).then(() => after.current?.(n)).catch(() => {});
-    };
-    const drag = (dy: number): boolean => {
-      if (opts.edges) {
-        const atTop = el.scrollTop <= 0;
-        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 1;
-        if (!((dy > 0 && atTop) || (dy < 0 && atBottom))) { acc = 0; return false; }
-      }
-      // px of drag per pane line, so the text keeps up with the finger
-      const STEP = step.current?.() || 14;
-      acc += dy;
-      while (Math.abs(acc) >= STEP) { const d = Math.sign(acc); pending += d; acc -= d * STEP; }
-      if (pending && !timer) timer = setTimeout(flush, 30);
-      return true;
-    };
-    const onStart = (e: TouchEvent) => { lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; acc = 0; };
-    const onMove = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
-      const { clientX: x, clientY: y } = e.touches[0];
-      const dx = x - lastX, dy = y - lastY; lastX = x; lastY = y;
-      // A sideways drag scrolls a wide table, not the pane.
-      if (Math.abs(dx) > Math.abs(dy)) return;
-      if (drag(dy) && e.cancelable) e.preventDefault();
-    };
-    const onWheel = (e: WheelEvent) => { if (drag(-e.deltaY)) { e.preventDefault(); e.stopPropagation(); } };
-    // Capture phase, so xterm (in the Terminal tab) never sees the gesture as a selection or its own scroll.
-    el.addEventListener('touchstart', onStart, { passive: true, capture: true });
-    el.addEventListener('touchmove', onMove, { passive: false, capture: true });
-    el.addEventListener('wheel', onWheel, { passive: false, capture: true });
-    return () => {
-      el.removeEventListener('touchstart', onStart, { capture: true });
-      el.removeEventListener('touchmove', onMove, { capture: true });
-      el.removeEventListener('wheel', onWheel, { capture: true });
-      clearTimeout(timer);
-    };
-  }, [ref, tmux, opts.active, opts.edges]);
 }
 
 /**
@@ -830,11 +772,9 @@ function layoutScreen(text: string, width: number): ScreenBlock[] {
   return out;
 }
 
-/** xterm has no touch scrolling, and tmux or the agent owns the scrollback anyway: drags go to the pane. */
-function TermTab({ tmux, agent }: { tmux: string; agent: Agent }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useDragScroll(ref, tmux, { active: true, edges: false });
-  return <div className="m-term" ref={ref}><TerminalPane tmux={tmux} agent={agent} active fontSize={11} /></div>;
+/** TerminalPane turns touch drags into pane scrolling itself. */
+function TermTab({ tmux, agent, fontSize }: { tmux: string; agent: Agent; fontSize: number }) {
+  return <div className="m-term"><TerminalPane tmux={tmux} agent={agent} active fontSize={fontSize} /></div>;
 }
 
 const KEYS: { label: string; keys: string[]; title: string }[] = [

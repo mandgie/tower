@@ -11,6 +11,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { Doctor } from './components/Doctor';
 import { WorkspaceBar, isAutoName, PaneGrid, gridColumns, type Workspace, type Pane } from './components/Workspace';
 import { TodoPanel } from './components/TodoPanel';
+import { useVisualViewportHeight } from './components/viewport';
 
 declare global {
   interface Window { multisession?: { onCommand: (cb: (cmd: string) => void) => () => void; openExternal?: (url: string) => Promise<boolean>; pathForFile?: (file: File) => string } }
@@ -65,6 +66,8 @@ export function App() {
   const [todosOpen, setTodosOpen] = useState(() => localStorage.getItem(TODOS_KEY) === '1');
   const [todoFocus, setTodoFocus] = useState<{ id: string; at: number } | null>(null);
   useEffect(() => { localStorage.setItem(TODOS_KEY, todosOpen ? '1' : '0'); }, [todosOpen]);
+  // In Electron the window has no on-screen keyboard to make room for.
+  useVisualViewportHeight(!window.multisession);
 
   useEffect(() => { localStorage.setItem(WS_KEY, JSON.stringify({ workspaces, activeId })); }, [workspaces, activeId]);
   useEffect(() => { localStorage.setItem(VIEW_KEY, view); }, [view]);
