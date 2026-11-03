@@ -96,6 +96,8 @@ export interface Snapshot {
   todoScans?: TodoScan[];           // the todo finder's state per workspace
   lost?: LostSession[];             // sessions the tmux server lost (the Mac shut down), waiting to be resumed
   hosts?: HostInfo[];               // other Tower servers whose sessions are in this list
+  hostWorkspaces?: Record<string, WorkspaceSummary[]>;  // each host's own workspaces, under `@host:` names; a host is missing until its feed has been read
+  hostWorkspaceOps?: WorkspaceOp[]; // workspace changes queued on a host, under `@host:` names (ids too), for this Mac to apply
 }
 
 export interface ProjectDir { cwd: string; name: string }
@@ -118,6 +120,8 @@ export interface SnapshotDelta {
   todoScans?: TodoScan[];
   lost?: LostSession[];
   hosts?: HostInfo[];
+  hostWorkspaces?: Record<string, WorkspaceSummary[]>;
+  hostWorkspaceOps?: WorkspaceOp[];
 }
 
 export type SnapshotEvent = { t: 'full'; snapshot: Snapshot } | ({ t: 'delta' } & SnapshotDelta);
@@ -126,6 +130,7 @@ export interface WorkspaceSummary {
   id: string;
   name: string;
   panes: string[];     // tmux names, in grid order
+  auto?: boolean;      // a generated name, replaced by the first session's project (kept for workspaces a host stores)
   todos?: boolean;     // the todo finder reads this workspace's Claude sessions (server/todos.ts)
 }
 
@@ -204,6 +209,7 @@ export interface Placement {
   cwd: string;
   workspace?: string;
   after?: string;      // tmux name of the pane to put it next to (an agent's parent)
+  host?: string;       // queued on this host (server/hosts.ts): the session joins one of the host's workspaces
   at: number;
 }
 

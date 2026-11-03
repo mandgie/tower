@@ -36,6 +36,8 @@ export function applyDelta(prev: Snapshot, d: SnapshotDelta): Snapshot {
   sessions.push(...fresh.values());
   sortSessions(sessions);
   const extraDirs = d.extraDirs ?? prev.extraDirs;
+  // A field the delta names changed; null means it went away. A field it does not name keeps its value.
+  const opt = <K extends keyof SnapshotDelta & keyof Snapshot>(k: K): Snapshot[K] => (k in d ? ((d[k] ?? undefined) as Snapshot[K]) : prev[k]);
   return {
     generatedAt: d.generatedAt,
     sessions,
@@ -43,13 +45,15 @@ export function applyDelta(prev: Snapshot, d: SnapshotDelta): Snapshot {
     extraDirs,
     pending: d.pending ?? prev.pending,
     renamed: d.renamed ?? prev.renamed,
-    workspaces: d.workspaces ?? prev.workspaces,
-    placements: d.placements ?? prev.placements,
-    workspaceOps: d.workspaceOps ?? prev.workspaceOps,
-    todos: d.todos ?? prev.todos,
-    todoScans: d.todoScans ?? prev.todoScans,
-    lost: d.lost ?? prev.lost,
-    hosts: d.hosts ?? prev.hosts,
+    workspaces: opt('workspaces'),
+    placements: opt('placements'),
+    workspaceOps: opt('workspaceOps'),
+    todos: opt('todos'),
+    todoScans: opt('todoScans'),
+    lost: opt('lost'),
+    hosts: opt('hosts'),
+    hostWorkspaces: opt('hostWorkspaces'),
+    hostWorkspaceOps: opt('hostWorkspaceOps'),
   };
 }
 

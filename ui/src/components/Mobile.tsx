@@ -9,6 +9,7 @@ import { Transcript } from './Transcript';
 import { TerminalPane } from './Terminal';
 import { useDragScroll } from './dragScroll';
 import { useVisualViewportHeight } from './viewport';
+import { MachineTag } from './Machine';
 import { NewSession } from './NewSession';
 import { TodoPanel } from './TodoPanel';
 
@@ -300,6 +301,7 @@ function Row({ s, now, on, onOpen, onMenu }: { s: Session; now: number; on: bool
       <span className="m-row-main">
         <span className="m-row-title">{s.title || 'Untitled'}</span>
         <span className="m-row-meta">
+          <MachineTag host={s.host} />
           <span>{s.project}</span>
           {s.gitBranch && s.gitBranch !== 'HEAD' && <span className="branch">{s.gitBranch}</span>}
           {s.spawn && <span className="m-tag-todo" title={s.spawn.parentTitle ? `Started by ${s.spawn.parentTitle}` : undefined}>↳ {s.spawn.name}</span>}
@@ -547,7 +549,7 @@ function SessionView({ s, connected, onBack, onMenu, wide }: { s: Session; conne
           <span className="m-title-main">{s.title || 'Untitled'}</span>
           <span className="m-title-sub">
             {!connected && <span className="m-offline">offline · </span>}
-            {s.project}{s.live ? ` · ${s.live.kind === 'external' ? 'in a terminal' : statusWord(s.status) || 'idle'}` : ''}
+            {s.host && <>{s.host} · </>}{s.project}{s.live ? ` · ${s.live.kind === 'external' ? 'in a terminal' : statusWord(s.status) || 'idle'}` : ''}
           </span>
         </div>
         {s.live && <ContextBadge session={s} />}

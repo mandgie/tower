@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { applyDelta } from '../../shared/snapshot';
+import { setMachineOrder } from './components/Machine';
 import type { Snapshot, SnapshotEvent, Settings, Agent, TranscriptResponse, DoctorResult, RemoteInfo, WorkspaceSummary, WorkspaceOp, WorkspaceOpRequest, Todo, TodoStatus, HostInfo } from '../../shared/types';
 
 /** Where the Mac should put a session the phone starts (see `Placement`); absent on the desktop, which opens its own panes. */
@@ -42,6 +43,8 @@ export const api = {
   clearWorkspaceOp: (id: string) => j<{ ok: true }>(`/api/workspaces/ops/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   clearPlacement: (tmux: string) => j<{ ok: true }>(`/api/placements/${encodeURIComponent(tmux)}`, { method: 'DELETE' }),
   saveWorkspaces: (w: WorkspaceSummary[]) => j<{ ok: true }>('/api/workspaces', { method: 'PUT', body: JSON.stringify(w) }),
+  /** A host's workspaces (names under `@host:`), stored on the host. */
+  saveHostWorkspaces: (host: string, w: WorkspaceSummary[]) => j<{ ok: true }>(`/api/hosts/${encodeURIComponent(host)}/workspaces`, { method: 'PUT', body: JSON.stringify(w) }),
   remote: () => j<RemoteInfo>('/api/remote'),
   rotateRemote: () => j<RemoteInfo>('/api/remote/rotate', { method: 'POST' }),
   hosts: () => j<HostInfo[]>('/api/hosts'),
@@ -75,8 +78,8 @@ export function useSnapshot(): { snapshot: Snapshot | null; connected: boolean }
       ws.onmessage = (ev) => {
         let m: SnapshotEvent;
         try { m = JSON.parse(ev.data); } catch { return; }
-        if (m.t === 'full') setSnapshot(m.snapshot);
-        else setSnapshot((prev) => applyDelta(prev ?? EMPTY, m));
+        if (m.t === 'full') { setMachineOrder(m.snapshot.hosts); setSnapshot(m.snapshot); }
+        else { if (m.hosts) setMachineOrder(m.hosts); setSnapshot((prev) => applyDelta(prev ?? EMPTY, m)); }
       };
       ws.onclose = () => { setConnected(false); if (!closed) setTimeout(connect, retry); retry = Math.min(retry * 2, 10000); };
       ws.onerror = () => ws?.close();

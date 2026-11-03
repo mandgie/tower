@@ -103,6 +103,32 @@ html.kb-open .app { height: var(--vvh); }
 .project-new { width: 24px; height: 24px; border-radius: 6px; color: var(--dim); font-size: 16px; line-height: 1; opacity: 0; }
 .project-head:hover .project-new { opacity: 1; }
 .project-new:hover { background: var(--raised); color: var(--fog); }
+/* ---------- machines (this Mac and the hosts, components/Machine.tsx) ---------- */
+.machine-bar { display: flex; flex-wrap: wrap; gap: 4px; }
+.machine-pick { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--mist); font-size: 11.5px; max-width: 100%; }
+.machine-pick > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.machine-pick:hover { color: var(--fog); background: var(--hover); }
+.machine-pick.on { color: var(--fog); background: var(--raised); border-color: var(--machine, var(--mist)); }
+.machine-live { font-family: var(--font-mono); font-size: 11px; color: var(--codex); }
+.machine-live:empty { display: none; }
+.machine-dot { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 2px; background: var(--machine); }
+.machine-dot.local { background: var(--mist); }
+.machine-dot.offline { background: transparent; box-shadow: inset 0 0 0 1.5px var(--machine); }
+.machine + .machine { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.machine-head { display: flex; align-items: center; }
+.machine-head:hover .project-new { opacity: 1; }
+.machine-toggle { flex: 1; display: flex; align-items: center; gap: 7px; padding: 6px; min-width: 0; color: var(--fog); font-size: 12.5px; font-weight: 600; }
+.machine-name { white-space: nowrap; }
+.machine:not(.local) .machine-name { font-family: var(--font-mono); }
+.machine:not(.local) .machine-name { color: var(--machine); }
+.machine-state { color: var(--dim); font-size: 11px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.machine.offline .machine-state { color: var(--wait); }
+.machine.offline .project { opacity: 0.6; }
+.machine .project { margin-left: 4px; }
+.machine-tag { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 0 5px; border-radius: 4px; font: 600 10.5px/16px var(--font-mono); color: var(--machine); background: color-mix(in srgb, var(--machine) 16%, transparent); white-space: nowrap; }
+.machine-tag.offline { background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--machine) 50%, transparent); opacity: 0.75; }
+.sum-offline { color: var(--wait); }
+.sum-offline::before { content: '⚠ '; }
 
 .row {
   display: flex; align-items: stretch; width: 100%; text-align: left; border-radius: 6px; padding: 5px 8px 5px 0; gap: 8px; min-width: 0;

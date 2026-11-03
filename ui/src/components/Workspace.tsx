@@ -4,6 +4,7 @@ import { TerminalPane } from './Terminal';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
 import { LoopBadge } from './LoopBadge';
+import { MachineTag } from './Machine';
 
 export interface Pane { tmux: string; agent: Agent; openedAt?: number }
 /** `auto` marks a generated name that gets replaced by the first session's project. Renaming clears it. */
@@ -24,11 +25,13 @@ export function summarizeStatus(statuses: Status[]): Status | null {
   return statuses.reduce((a, b) => (RANK[a] <= RANK[b] ? a : b));
 }
 
-export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing, onActivate, onCreate, onRename, onClose, todoCounts, todosOpen, onTodos }: {
+export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing, onActivate, onCreate, onRename, onClose, todoCounts, todosOpen, onTodos, todosAvailable = true }: {
   workspaces: Workspace[]; activeId: string; byTmux: Map<string, Session>;
   editing: string | null; setEditing: (id: string | null) => void;
   onActivate: (id: string) => void; onCreate: () => void; onRename: (id: string, name: string) => void; onClose: (id: string) => void;
   todoCounts: Map<string, { proposed: number; open: number }>; todosOpen: boolean; onTodos: () => void;
+  /** False for a host's workspaces: their todos stay on the host. */
+  todosAvailable?: boolean;
 }) {
   const activeTodos = todoCounts.get(activeId);
   const activeWs = workspaces.find((w) => w.id === activeId);
@@ -64,12 +67,12 @@ export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing
         );
       })}
       <button className="ws-add" onClick={onCreate} title="New workspace">+</button>
-      <button className={`ws-todos ${todosOpen ? 'open' : ''} ${activeWs?.todos ? 'on' : ''}`} onClick={onTodos} title="Todos for this workspace  ⌘⇧T">
+      {todosAvailable && <button className={`ws-todos ${todosOpen ? 'open' : ''} ${activeWs?.todos ? 'on' : ''}`} onClick={onTodos} title="Todos for this workspace  ⌘⇧T">
         <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3.5l1.2 1.2L5.5 2.4M2 9.5l1.2 1.2 2.3-2.3M7.5 4h4.5M7.5 10h4.5" /></svg>
         Todos
         {activeWs?.todos && (activeTodos?.proposed ?? 0) > 0 && <span className="ws-todos-new">{activeTodos!.proposed}</span>}
         {activeWs?.todos && !(activeTodos?.proposed) && (activeTodos?.open ?? 0) > 0 && <span className="ws-todos-open">{activeTodos!.open}</span>}
-      </button>
+      </button>}
     </div>
   );
 }
@@ -150,7 +153,8 @@ function PaneView({ pane, session: s, lost, resumeError, onResume, focused, hidd
       <header className="pane-head" draggable onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', pane.tmux); onDragStart(); }} onDragEnd={onDragEnd}
         title={s ? `${s.title}\n${s.cwd}\nDrag onto another pane to swap` : pane.tmux}>
         <span className="dot" />
-        <span className="pane-project">{s?.project ?? pane.tmux.replace(/^ms-\w+-/, '')}</span>
+        <MachineTag host={s?.host} />
+        <span className="pane-project">{s?.project ?? pane.tmux.replace(/^(@[^:]+:)?ms-\w+-/, '')}</span>
         {s?.todo && <TodoBadge todo={s.todo} onClick={() => onTodo(s.todo!.id)} />}
         {s?.spawn && <span className="spawn-badge" title={`Agent "${s.spawn.name}", started by ${s.spawn.parentTitle ? `"${s.spawn.parentTitle}"` : 'another session'} with tower spawn`}>↳ {s.spawn.name}</span>}
         <span className="pane-title">{s?.title ?? ''}</span>

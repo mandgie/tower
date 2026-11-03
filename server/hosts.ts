@@ -5,7 +5,7 @@ import { APP_DIR } from './config.js';
 import { uploadFile } from './uploads.js';
 import { applyDelta } from '../shared/snapshot.js';
 import { onHost, splitHost, validHostName } from '../shared/hosts.js';
-import type { HostInfo, LostSession, PendingLaunch, Session, Snapshot, SnapshotEvent } from '../shared/types.js';
+import type { HostInfo, LostSession, PendingLaunch, Placement, Session, Snapshot, SnapshotEvent, WorkspaceOp, WorkspaceSummary } from '../shared/types.js';
 
 /**
  * Hosts: other Tower servers (a VM on Tailscale that runs the sessions which must not stop when the Mac
@@ -148,14 +148,13 @@ export function removeHost(name: string): void {
 
 // ---- the host's snapshot under addresses -------------------------------------------------------
 
-function mapSession(host: string, online: boolean, s: Session): Session {
+function mapSession(host: string, s: Session): Session {
   const a = (x: string) => onHost(host, x);
   return {
     ...s,
     key: a(s.key),
     id: a(s.id),
     cwd: a(s.cwd),
-    project: `${host} · ${s.project}${online ? '' : ' (offline)'}`,
     host,
     transcriptPath: undefined,
     live: s.live?.kind === 'tmux' ? { ...s.live, tmux: a(s.live.tmux) } : undefined,
@@ -169,15 +168,32 @@ function mapSession(host: string, online: boolean, s: Session): Session {
 }
 
 /** The hosts' sessions and the lists that name their tmux sessions, ready to add to this server's snapshot. */
-export function hostParts(): { sessions: Session[]; pending: PendingLaunch[]; renamed: Record<string, string>; lost: LostSession[] } {
-  const out = { sessions: [] as Session[], pending: [] as PendingLaunch[], renamed: {} as Record<string, string>, lost: [] as LostSession[] };
+export function hostParts(): {
+  sessions: Session[]; pending: PendingLaunch[]; renamed: Record<string, string>; lost: LostSession[];
+  placements: Placement[]; workspaces: Record<string, WorkspaceSummary[]>; workspaceOps: WorkspaceOp[];
+} {
+  const out = {
+    sessions: [] as Session[], pending: [] as PendingLaunch[], renamed: {} as Record<string, string>, lost: [] as LostSession[],
+    placements: [] as Placement[], workspaces: {} as Record<string, WorkspaceSummary[]>, workspaceOps: [] as WorkspaceOp[],
+  };
   for (const c of conns.values()) {
     if (!c.snap) continue;
     const h = c.cfg.name;
-    for (const s of c.snap.sessions) out.sessions.push(mapSession(h, c.online, s));
-    for (const p of c.snap.pending ?? []) out.pending.push({ ...p, tmux: onHost(h, p.tmux), cwd: onHost(h, p.cwd) });
-    for (const [from, to] of Object.entries(c.snap.renamed ?? {})) out.renamed[onHost(h, from)] = onHost(h, to);
-    for (const l of c.snap.lost ?? []) out.lost.push({ ...l, tmux: onHost(h, l.tmux), id: onHost(h, l.id), cwd: onHost(h, l.cwd) });
+    const a = (x: string) => onHost(h, x);
+    for (const s of c.snap.sessions) out.sessions.push(mapSession(h, s));
+    for (const p of c.snap.pending ?? []) out.pending.push({ ...p, tmux: a(p.tmux), cwd: a(p.cwd) });
+    for (const [from, to] of Object.entries(c.snap.renamed ?? {})) out.renamed[a(from)] = a(to);
+    for (const l of c.snap.lost ?? []) out.lost.push({ ...l, tmux: a(l.tmux), id: a(l.id), cwd: a(l.cwd) });
+    // The host's workspaces, and the changes queued for them: this Mac applies them and writes the result back.
+    out.workspaces[h] = (c.snap.workspaces ?? []).map((w) => ({ ...w, id: a(w.id), panes: w.panes.map(a) }));
+    for (const p of c.snap.placements ?? []) {
+      out.placements.push({ ...p, tmux: a(p.tmux), cwd: a(p.cwd), workspace: p.workspace && a(p.workspace), after: p.after && a(p.after), host: h });
+    }
+    for (const o of c.snap.workspaceOps ?? []) {
+      const id = a(o.id);
+      if (o.op === 'move') out.workspaceOps.push({ ...o, id, tmux: a(o.tmux), to: o.to && a(o.to) });
+      else out.workspaceOps.push({ ...o, id, workspace: a(o.workspace) });
+    }
   }
   return out;
 }

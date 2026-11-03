@@ -7,6 +7,8 @@ import type { WorkspaceSummary, WorkspaceOp, WorkspaceOpRequest } from '../share
 /**
  * A read-only mirror of the Mac's workspaces. The desktop UI owns them (localStorage) and pushes every
  * change here. The phone reads them from the snapshot, and the todo finder reads which workspaces have it on.
+ * On a host (a headless Tower server, server/hosts.ts) this file is the workspaces' only store: the Mac
+ * that paired with the host reads them from the host's feed and writes every change back.
  */
 const FILE = path.join(APP_DIR, 'workspaces.json');
 
@@ -28,7 +30,7 @@ function clean(raw: unknown): WorkspaceSummary[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((w) => w && typeof w.id === 'string' && typeof w.name === 'string' && Array.isArray(w.panes))
-    .map((w) => ({ id: w.id, name: w.name, panes: w.panes.filter((p: unknown) => typeof p === 'string'), ...(w.todos === true ? { todos: true } : {}) }));
+    .map((w) => ({ id: w.id, name: w.name, panes: w.panes.filter((p: unknown) => typeof p === 'string'), ...(w.auto === true ? { auto: true } : {}), ...(w.todos === true ? { todos: true } : {}) }));
 }
 
 /**
@@ -39,7 +41,8 @@ const OPS_FILE = path.join(APP_DIR, 'workspace-ops.json');
 let ops: WorkspaceOp[] = [];
 try { ops = JSON.parse(fs.readFileSync(OPS_FILE, 'utf8')); } catch { /* none */ }
 function saveOps(): void {
-  fs.writeFile(OPS_FILE, JSON.stringify(ops), () => {});
+  // Synchronous: two quick changes written at once would leave the longer one's tail in the file.
+  fs.writeFileSync(OPS_FILE, JSON.stringify(ops));
 }
 
 export function workspaceOps(): WorkspaceOp[] {

@@ -1,10 +1,11 @@
-import type { Session } from '../../../shared/types';
+import type { HostInfo, Session } from '../../../shared/types';
 import { relTime, useNow } from '../api';
+import { MachineTag, hostOnline } from './Machine';
 
 const ORDER: Record<string, number> = { done: 0, working: 1, waiting: 2, looping: 3, ended: 4, idle: 5 };
 
-export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpen, onToggleSidebar }: {
-  sessions: Session[]; connected: boolean; onPick: (s: Session) => void; activeKey: string | null;
+export function StatusStrip({ sessions, hosts = [], connected, onPick, activeKey, sidebarOpen, onToggleSidebar }: {
+  sessions: Session[]; hosts?: HostInfo[]; connected: boolean; onPick: (s: Session) => void; activeKey: string | null;
   sidebarOpen: boolean; onToggleSidebar: () => void;
 }) {
   const now = useNow(5000);
@@ -35,12 +36,14 @@ export function StatusStrip({ sessions, connected, onPick, activeKey, sidebarOpe
             {looping > 0 && <span className="sum sum-loop">{looping} looping</span>}
           </>
         )}
+        {hosts.filter((h) => !h.online).map((h) => <span key={h.name} className="sum sum-offline" title={h.error || 'Out of reach'}>{h.name} offline</span>)}
       </div>
       <div className="chips">
         {live.map((s) => (
           <button key={s.key} className={`chip agent-${s.agent} status-${s.status} ${activeKey === s.key ? 'active' : ''}`} onClick={() => onPick(s)}
             title={`${s.title}\n${s.cwd}${s.live?.kind === 'external' ? '\nRunning in another terminal' : ''}`}>
             <span className="dot" />
+            <MachineTag host={s.host} offline={!hostOnline(hosts, s.host)} />
             <span className="chip-name">{s.project}</span>
             <span className="chip-meta">{s.live?.kind === 'external' ? 'terminal' : statusWord(s.status)} · {relTime(s.updatedAt, now)}</span>
           </button>

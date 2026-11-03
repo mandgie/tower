@@ -45,7 +45,7 @@ const remoteSockets = new Set<WebSocket>();
 let refreshing = false;
 let refreshQueued = false;
 
-const DELTA_FIELDS = ['extraDirs', 'pending', 'renamed', 'workspaces', 'placements', 'workspaceOps', 'todos', 'todoScans', 'lost', 'hosts'] as const;
+const DELTA_FIELDS = ['extraDirs', 'pending', 'renamed', 'workspaces', 'placements', 'workspaceOps', 'todos', 'todoScans', 'lost', 'hosts', 'hostWorkspaces', 'hostWorkspaceOps'] as const;
 
 async function refresh(): Promise<Snapshot> {
   if (refreshing) { refreshQueued = true; return snapshot; }
@@ -76,7 +76,8 @@ async function refresh(): Promise<Snapshot> {
     let changed = delta.upsert.length > 0 || delta.remove.length > 0;
     for (const f of DELTA_FIELDS) {
       fields[f] = JSON.stringify(next[f] ?? null);
-      if (fields[f] !== sentFields[f]) { (delta as any)[f] = next[f]; changed = true; }
+      // null, not undefined, for a field that went away (the last host removed): JSON drops undefined, and the page would keep the old value.
+      if (fields[f] !== sentFields[f]) { (delta as any)[f] = next[f] ?? null; changed = true; }
     }
     snapshot = next; localSnap = local; snapshotJson = '';
     sentSessions = sessions; sentFields = fields;
@@ -107,7 +108,10 @@ function withHosts(local: Snapshot): Snapshot {
     pending: [...local.pending, ...h.pending],
     renamed: { ...local.renamed, ...h.renamed },
     lost: [...(local.lost ?? []), ...h.lost],
+    placements: [...(local.placements ?? []), ...h.placements],
     hosts,
+    hostWorkspaces: h.workspaces,
+    hostWorkspaceOps: h.workspaceOps,
   };
 }
 
@@ -169,6 +173,16 @@ async function hostRoute(req: http.IncomingMessage, res: http.ServerResponse, ur
       return hostApi(pane.host, 'POST', at, body);
     });
   }
+  mm = p.match(/^\/api\/workspaces\/ops\/([^/]+)$/);
+  const op = mm && splitHost(decodeURIComponent(mm[1]));
+  if (mm && op && m === 'DELETE') return answer(() => hostApi(op.host, 'DELETE', `/api/workspaces/ops/${encodeURIComponent(op.name)}`));
+  mm = p.match(/^\/api\/placements\/([^/]+)$/);
+  const placed = mm && splitHost(decodeURIComponent(mm[1]));
+  if (mm && placed && m === 'DELETE') {
+    // A placement for a host's session can be this Mac's (started here, on the host) or the host's own: clear both.
+    clearPlacement(decodeURIComponent(mm[1]));
+    return answer(() => hostApi(placed.host, 'DELETE', `/api/placements/${encodeURIComponent(placed.name)}`));
+  }
   if (m === 'POST' && p === '/api/sessions/new') {
     // Read once here; the local route reads the same body again from this copy.
     const body = await readBody(req);
@@ -219,6 +233,9 @@ async function hostRoute(req: http.IncomingMessage, res: http.ServerResponse, ur
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, remote: boolean): Promise<void> {
   const p = url.pathname;
   const m = req.method;
+  // The workspaces' owner: this machine's own window, or the Mac that paired with this server as a host
+  // (server/hosts.ts sends `x-tower-owner`). A phone only reads them and queues changes.
+  const owner = !remote || req.headers['x-tower-owner'] === '1';
   try {
     // Pairing is managed from the Mac only; a paired phone cannot read the token or mint a new one.
     if (p.startsWith('/api/remote')) {
@@ -239,6 +256,20 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         try { return json(res, 200, await addHost(String(b.pairUrl || ''), b.name ? String(b.name) : undefined)); }
         catch (e) { return json(res, 400, { error: (e as Error).message }); }
       }
+      const wsOf = p.match(/^\/api\/hosts\/([^/]+)\/workspaces$/);
+      if (m === 'PUT' && wsOf) {
+        // A host's workspaces, edited on this Mac: store them on the host without the `@host:` names.
+        const host = decodeURIComponent(wsOf[1]);
+        const b = await readBody(req);
+        const bare = (x: unknown) => { const a = typeof x === 'string' ? splitHost(x) : null; return a && a.host === host ? a.name : null; };
+        const list = (Array.isArray(b) ? b : []).flatMap((w: any) => {
+          const id = bare(w?.id);
+          if (!id || typeof w.name !== 'string' || !Array.isArray(w.panes)) return [];
+          return [{ ...w, id, panes: w.panes.map(bare).filter(Boolean) }];
+        });
+        try { await hostApi(host, 'PUT', '/api/workspaces', list); } catch (e) { return json(res, 502, { error: (e as Error).message }); }
+        return json(res, 200, { ok: true });
+      }
       const one = p.match(/^\/api\/hosts\/([^/]+)$/);
       if (m === 'DELETE' && one) {
         try { removeHost(decodeURIComponent(one[1])); return json(res, 200, { ok: true }); }
@@ -257,7 +288,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
     if (m === 'PUT' && p === '/api/workspaces') {
       // The Mac owns the workspaces; the phone only reads them from the snapshot.
-      if (remote) return json(res, 403, { error: 'Only available on the Mac' });
+      if (!owner) return json(res, 403, { error: 'Only available on the Mac' });
       saveWorkspaces(await readBody(req));
       refresh();
       return json(res, 200, { ok: true });
@@ -272,7 +303,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
     const doneOp = p.match(/^\/api\/workspaces\/ops\/([^/]+)$/);
     if (m === 'DELETE' && doneOp) {
-      if (remote) return json(res, 403, { error: 'Only available on the Mac' });
+      if (!owner) return json(res, 403, { error: 'Only available on the Mac' });
       clearWorkspaceOp(decodeURIComponent(doneOp[1]));
       refresh();
       return json(res, 200, { ok: true });
@@ -310,7 +341,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const placed = p.match(/^\/api\/placements\/([^/]+)$/);
     if (m === 'DELETE' && placed) {
       // The desktop clears a placement once the pane is in a workspace.
-      if (remote) return json(res, 403, { error: 'Only available on the Mac' });
+      if (!owner) return json(res, 403, { error: 'Only available on the Mac' });
       clearPlacement(decodeURIComponent(placed[1]));
       refresh();
       return json(res, 200, { ok: true });

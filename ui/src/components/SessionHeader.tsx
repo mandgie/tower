@@ -5,11 +5,13 @@ import { ContextBadge } from './ContextBadge';
 import { LoopBadge } from './LoopBadge';
 import { TodoBadge } from './Workspace';
 import { displayAddr, splitHost } from '../../../shared/hosts';
+import { MachineTag } from './Machine';
 
 export function SessionHeader({ session: s, onResume, onFork, onKill, onTodo }: {
   session: Session; onResume?: () => void; onFork?: () => void; onKill?: () => void; onTodo?: (id: string) => void;
 }) {
-  const cwd = displayAddr(s.cwd);
+  // The tag already names the machine.
+  const cwd = displayAddr(splitHost(s.cwd)?.name ?? s.cwd);
   const id = splitHost(s.id)?.name ?? s.id;
   const external = s.live?.kind === 'external';
   const [confirm, setConfirm] = useState(false);
@@ -22,6 +24,7 @@ export function SessionHeader({ session: s, onResume, onFork, onKill, onTodo }: 
       <div className="head-main">
         <div className="head-title">
           <span className="agent-badge">{s.agent === 'claude' ? 'Claude' : 'Codex'}</span>
+          <MachineTag host={s.host} />
           <h2>{s.title || 'Untitled'}</h2>
           {s.todo && onTodo && <TodoBadge todo={s.todo} onClick={() => onTodo(s.todo!.id)} />}
           {s.spawn && <span className="spawn-badge" title={`Agent "${s.spawn.name}", started by ${s.spawn.parentTitle ? `"${s.spawn.parentTitle}"` : 'another session'} with tower spawn`}>↳ {s.spawn.name}</span>}
