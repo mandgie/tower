@@ -216,7 +216,9 @@ html.kb-open .app { height: var(--vvh); }
 .pane-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .pane-status { font-family: var(--font-mono); font-size: 10.5px; flex: 0 0 auto; }
 .ctx { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--mist); white-space: nowrap; }
-.ctx-bar { width: 40px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.ctx-bar { position: relative; width: 40px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.ctx-mark { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--fog); }
+.ctx.idle-due .ctx-text { color: var(--wait); }
 .ctx-fill { display: block; height: 100%; border-radius: 2px; background: var(--mist); transition: width 300ms; }
 .agent-claude .ctx.low .ctx-fill { background: var(--claude); }
 .agent-codex .ctx.low .ctx-fill { background: var(--codex); }
@@ -276,7 +278,8 @@ html.kb-open .app { height: var(--vvh); }
 .stats-value { font-family: var(--font-mono); font-size: 12px; }
 .stats-value.high { color: var(--danger); }
 .stats-value.mid { color: var(--wait); }
-.stats-bar { height: 6px; border-radius: 3px; background: var(--ink); overflow: hidden; }
+.stats-bar { position: relative; height: 6px; border-radius: 3px; background: var(--ink); overflow: hidden; }
+.stats-mark { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--fog); }
 .stats-fill { display: block; height: 100%; border-radius: 3px; background: var(--mist); transition: width 300ms; }
 .agent-claude .stats-fill.low { background: var(--claude); }
 .agent-codex .stats-fill.low { background: var(--codex); }

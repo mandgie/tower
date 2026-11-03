@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Session, Message, Block, SessionStats } from '../../../shared/types';
 import { api } from '../api';
-import { fmtTokens, contextLevel } from './ContextBadge';
+import { fmtTokens, contextLevel, idleMark, idleNote } from './ContextBadge';
 
 const PAGE = 300;
 
@@ -94,6 +94,7 @@ function StatsStrip({ stats, agent }: { stats: SessionStats; agent: Session['age
   const win = stats.contextWindow;
   const pct = ctx && win ? Math.min(100, Math.round((ctx / win) * 100)) : null;
   const level = pct == null ? '' : contextLevel(pct);
+  const idle = win ? idleMark(stats.idleCompactAt, win) : null;
   const facts: { label: string; value: string; title?: string }[] = [];
   facts.push({ label: 'turns', value: String(stats.turns), title: 'Prompts you sent' });
   facts.push({ label: 'tool calls', value: String(stats.toolCalls) });
@@ -114,8 +115,9 @@ function StatsStrip({ stats, agent }: { stats: SessionStats; agent: Session['age
               <span className="stats-label">Context on resume</span>
               <span className={`stats-value ${level}`}>{fmtTokens(ctx)} <span className="muted">of {fmtTokens(win)}{stats.contextEstimated ? ' est.' : ''} · {pct}%</span></span>
             </div>
-            <div className="stats-bar" role="progressbar" aria-valuenow={pct ?? 0} aria-valuemin={0} aria-valuemax={100}>
+            <div className="stats-bar" role="progressbar" aria-valuenow={pct ?? 0} aria-valuemin={0} aria-valuemax={100} title={idle ? idleNote(ctx, stats.idleCompactAt!) : undefined}>
               <span className={`stats-fill ${level}`} style={{ width: `${pct}%` }} />
+              {idle && <span className="stats-mark" style={{ left: `${idle}%` }} />}
             </div>
           </>
         ) : (

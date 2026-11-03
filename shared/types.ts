@@ -72,6 +72,7 @@ export interface SessionContext {
   tokens: number;      // tokens the model saw on its last call
   window: number;      // model context window
   estimated: boolean;  // window guessed from the model name (Claude) rather than reported (Codex)
+  idleCompactAt?: number;  // Claude Code compacts an idle session at or above this many tokens (server/claude.ts)
 }
 
 export interface Project {
@@ -279,6 +280,7 @@ export interface SessionStats {
   contextTokens?: number;      // tokens in the model's context at the last turn
   contextWindow?: number;      // model context window; estimated for Claude
   contextEstimated?: boolean;
+  idleCompactAt?: number;      // see SessionContext.idleCompactAt
   outputTokens?: number;       // total generated across the session
   turns: number;               // real user prompts
   assistantMessages: number;

@@ -27,7 +27,7 @@ interface Meta {
 interface CacheEntry { size: number; mtimeMs: number; meta: Meta | null }
 
 /** Bump when Meta gains a field, so entries cached by size+mtime get re-extracted instead of missing it forever. */
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 let cache: Record<string, CacheEntry> = {};
 try {
   const j = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
@@ -92,6 +92,65 @@ export function contextTokensOf(usage: any): number {
   return (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
 }
 
+/** The model of a reply; Claude Code's own `<synthetic>` notices (API errors, interruptions) name none. */
+function modelOf(r: any): string | undefined {
+  const m = r.type === 'assistant' ? r.message?.model : undefined;
+  return typeof m === 'string' && m && m !== '<synthetic>' ? m : undefined;
+}
+
+/** Context size a record reports: the tokens of a reply, or what a compaction left before the next reply. */
+function contextOf(r: any): number | undefined {
+  if (r.isSidechain) return undefined;
+  if (r.type === 'assistant' && r.message?.usage) {
+    const t = contextTokensOf(r.message.usage);
+    return t > 0 ? t : undefined;
+  }
+  if (r.type === 'system' && r.subtype === 'compact_boundary' && r.compactMetadata?.postTokens > 0) return r.compactMetadata.postTokens;
+  return undefined;
+}
+
+const BACK_CHUNK = 512 * 1024;
+const BACK_MAX = 8 * 1024 * 1024;
+
+/**
+ * The last context size before byte `end`, reading backwards in chunks. Only for a tail that has none: a
+ * compaction writes a summary and attachments that can fill the whole tail window before the next reply.
+ */
+function contextBefore(fd: number, end: number, floor: number, size: number): { tokens: number; model?: string } | undefined {
+  // The tail dropped the line cut at `end`; start with its rest so that record parses whole.
+  let carry = Buffer.alloc(0);
+  for (let pos = end; pos < size; ) {
+    const buf = Buffer.alloc(Math.min(64 * 1024, size - pos));
+    const n = fs.readSync(fd, buf, 0, buf.length, pos);
+    if (n <= 0) break;
+    const nl = buf.subarray(0, n).indexOf(10);
+    carry = Buffer.concat([carry, buf.subarray(0, nl < 0 ? n : nl)]);
+    if (nl >= 0) break;
+    pos += n;
+  }
+  const stop = Math.max(floor, end - BACK_MAX);
+  while (end > stop) {
+    const start = Math.max(stop, end - BACK_CHUNK);
+    const buf = Buffer.alloc(end - start);
+    const n = fs.readSync(fd, buf, 0, buf.length, start);
+    const chunk = Buffer.concat([buf.subarray(0, n), carry]);
+    // The first line may start before `start`; keep it for the next chunk unless the file starts here.
+    const nl = start > 0 ? chunk.indexOf(10) : -1;
+    carry = nl < 0 ? (start > 0 ? chunk : Buffer.alloc(0)) : chunk.subarray(0, nl);
+    const recs = parseLines(chunk.subarray(nl + 1).toString('utf8'), false);
+    for (let i = recs.length - 1; i >= 0; i--) {
+      const t = contextOf(recs[i]);
+      if (t == null) continue;
+      // A compaction record names no model; the reply before it does.
+      let model: string | undefined;
+      for (let j = i; j >= 0 && !model; j--) model = modelOf(recs[j]);
+      return { tokens: t, model };
+    }
+    end = start;
+  }
+  return undefined;
+}
+
 function extractMeta(file: string, size: number, prevLoop?: LoopState): Meta | null {
   const fd = fs.openSync(file, 'r');
   try {
@@ -113,7 +172,7 @@ function extractMeta(file: string, size: number, prevLoop?: LoopState): Meta | n
       if (!meta.version && r.version) meta.version = r.version;
       if (!meta.createdAt && r.timestamp) meta.createdAt = Date.parse(r.timestamp);
       if (!meta.firstPrompt && isRealPrompt(r)) meta.firstPrompt = cleanPrompt(userText(r.message.content)!);
-      if (!meta.model && r.type === 'assistant' && r.message?.model) meta.model = r.message.model;
+      if (!meta.model && modelOf(r)) meta.model = modelOf(r);
       if (r.type === 'ai-title' && r.aiTitle) meta.title = r.aiTitle;
       if (r.type === 'summary' && r.summary && !meta.title) meta.title = r.summary;
     }
@@ -124,13 +183,16 @@ function extractMeta(file: string, size: number, prevLoop?: LoopState): Meta | n
       if (r.type === 'summary' && r.summary) meta.title = r.summary;
       if (r.type === 'user' || r.type === 'assistant') meta.lastRole = r.type;
       if (!meta.firstPrompt && isRealPrompt(r)) meta.firstPrompt = cleanPrompt(userText(r.message.content)!);
-      if (r.type === 'assistant' && r.message?.model) meta.model = r.message.model;
-      if (r.type === 'assistant' && !r.isSidechain && r.message?.usage) {
-        const t = contextTokensOf(r.message.usage);
-        if (t > 0) meta.contextTokens = t;
-      }
+      if (modelOf(r)) meta.model = modelOf(r);
+      const t = contextOf(r);
+      if (t != null) meta.contextTokens = t;
       if (r.gitBranch) meta.gitBranch = r.gitBranch;
       if (r.version) meta.version = r.version;
+    }
+    if (meta.contextTokens == null && !whole) {
+      const back = contextBefore(fd, size - TAIL_BYTES, HEAD_BYTES, size);
+      if (back) meta.contextTokens = back.tokens;
+      if (back?.model && !tail.some(modelOf)) meta.model = back.model;
     }
     const loop = scanLoop(tail, whole ? undefined : prevLoop);
     if (loop) meta.loop = loop;
@@ -273,6 +335,7 @@ export function liveClaudeSessions(): Map<string, ClaudeLive> {
 }
 
 export function scanClaudeSessions(): Session[] {
+  const idleCompactAt = claudeIdleCompactAt();
   const sessions: Session[] = [];
   let dirs: string[] = [];
   try { dirs = fs.readdirSync(PROJECTS_DIR); } catch { return sessions; }
@@ -316,7 +379,7 @@ export function scanClaudeSessions(): Session[] {
         version: m.version,
         transcriptPath: file,
         status: 'idle',
-        context: m.contextTokens != null ? { tokens: m.contextTokens, window: claudeContextWindow(m.model), estimated: true } : undefined,
+        context: m.contextTokens != null ? { tokens: m.contextTokens, window: claudeContextWindow(m.model), estimated: true, idleCompactAt } : undefined,
         loop: m.loop ? loopView(m.loop) : undefined,
       });
     }
@@ -357,6 +420,27 @@ export function claudeContextWindow(model?: string): number {
   return 200_000;
 }
 
+const USER_SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
+let idleSettings: { mtimeMs: number; off: boolean } | null = null;
+
+/**
+ * Claude Code compacts a conversation that has sat idle for 90% of the prompt cache TTL (54 minutes on the
+ * 1-hour cache) once it holds at least this many tokens, long before the window is full. Default 200k,
+ * CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS (floor 100k) moves it, `"idleCompaction": false` in settings turns it off.
+ */
+export function claudeIdleCompactAt(): number | undefined {
+  let mtimeMs = 0;
+  try { mtimeMs = fs.statSync(USER_SETTINGS).mtimeMs; } catch { /* no settings */ }
+  if (!idleSettings || idleSettings.mtimeMs !== mtimeMs) {
+    let off = false;
+    try { off = JSON.parse(fs.readFileSync(USER_SETTINGS, 'utf8')).idleCompaction === false; } catch { /* missing or partial */ }
+    idleSettings = { mtimeMs, off };
+  }
+  if (idleSettings.off) return undefined;
+  const env = Number(process.env.CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS);
+  return Number.isFinite(env) && env > 0 ? Math.max(100_000, env) : 200_000;
+}
+
 export function trackTime(stats: SessionStats, ts?: number): void {
   if (!ts) return;
   if (!stats.firstAt) stats.firstAt = ts;
@@ -369,7 +453,7 @@ export async function claudeTranscript(file: string): Promise<{ messages: Messag
   const stats = newStats();
   const files = new Set<string>();
   let model: string | undefined;
-  let lastUsage: any = null;
+  let lastContext: number | undefined;
   const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
   for await (const line of rl) {
     if (!line) continue;
@@ -378,12 +462,19 @@ export async function claudeTranscript(file: string): Promise<{ messages: Messag
     if (r.isSidechain) continue;
     const ts = r.timestamp ? Date.parse(r.timestamp) : undefined;
     if (r.type === 'user' || r.type === 'assistant') trackTime(stats, ts);
-    if (r.type === 'system' && r.subtype === 'compact_boundary') stats.compactions++;
+    if (r.type === 'system' && r.subtype === 'compact_boundary') {
+      stats.compactions++;
+      if (r.compactMetadata?.postTokens > 0) lastContext = r.compactMetadata.postTokens;
+    }
     if (isRealPrompt(r)) stats.turns++;
     if (r.type === 'assistant') {
       stats.assistantMessages++;
-      if (r.message?.model) model = r.message.model;
-      if (r.message?.usage) { lastUsage = r.message.usage; stats.outputTokens = (stats.outputTokens || 0) + (r.message.usage.output_tokens || 0); }
+      if (modelOf(r)) model = modelOf(r);
+      if (r.message?.usage) {
+        const t = contextTokensOf(r.message.usage);
+        if (t > 0) lastContext = t;
+        stats.outputTokens = (stats.outputTokens || 0) + (r.message.usage.output_tokens || 0);
+      }
       if (Array.isArray(r.message?.content)) for (const b of r.message.content) if (b.type === 'tool_use') {
         stats.toolCalls++;
         if (b.name === 'Agent' || b.name === 'Task') stats.subagents++;
@@ -428,10 +519,11 @@ export async function claudeTranscript(file: string): Promise<{ messages: Messag
     }
   }
   stats.filesTouched = files.size;
-  if (lastUsage) {
-    stats.contextTokens = contextTokensOf(lastUsage);
+  if (lastContext != null) {
+    stats.contextTokens = lastContext;
     stats.contextWindow = claudeContextWindow(model);
     stats.contextEstimated = true;
+    stats.idleCompactAt = claudeIdleCompactAt();
   }
   try { stats.bytes = fs.statSync(file).size; } catch { /* ignore */ }
   return { messages: msgs, stats };
