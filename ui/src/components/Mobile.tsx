@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { Agent, Session, Snapshot, TodoScan, WorkspaceSummary, WorkspaceOpRequest } from '../../../shared/types';
 import { placementTarget, applyWorkspaceOp } from '../../../shared/snapshot';
+import { onHost } from '../../../shared/hosts';
 import { api, relTime, useNow, useSnapshot, usePresent, useViewing, type LaunchBody } from '../api';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
@@ -9,7 +10,7 @@ import { Transcript } from './Transcript';
 import { TerminalPane } from './Terminal';
 import { useDragScroll } from './dragScroll';
 import { useVisualViewportHeight } from './viewport';
-import { MachineTag } from './Machine';
+import { MachineTag, machineColor } from './Machine';
 import { NewSession } from './NewSession';
 import { TodoPanel } from './TodoPanel';
 
@@ -140,10 +141,11 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
 
 // ---- workspaces ------------------------------------------------------------------------------
 
-/** A chip on the phone: one of the Mac's workspaces, or "Other" for live sessions in none of them. */
+/** A chip on the phone: one of the Mac's or a host's workspaces, or "Other" for live sessions in none of them. */
 interface Scope {
   id: string;
   name: string;
+  host?: string;       // the host that stores this workspace; absent for the Mac's own
   has: (s: Session) => boolean;
   /** Projects the workspace works in, so Recent can show closed sessions that belong with it. */
   cwds: Set<string>;
@@ -163,14 +165,17 @@ function workspaceScopes(snapshot: Snapshot | null): Scope[] {
   const sessions = snapshot.sessions;
   // Show a session the phone just started in its workspace now, rather than once the Mac has placed it.
   const cwdOf = new Map(sessions.flatMap((s) => (tmuxOf(s) ? [[tmuxOf(s)!, s.cwd] as const] : [])));
-  let all = (snapshot.workspaces ?? []).map((w) => ({ ...w, panes: w.panes.map(follow) }));
+  // The Mac's workspaces first, then each host's (their ids and panes carry `@host:`).
+  const hostOf = new Map<string, string>();
+  for (const [h, list] of Object.entries(snapshot.hostWorkspaces ?? {})) for (const w of list) hostOf.set(w.id, h);
+  let all = [...(snapshot.workspaces ?? []), ...Object.values(snapshot.hostWorkspaces ?? {}).flat()].map((w) => ({ ...w, panes: w.panes.map(follow) }));
   for (const p of snapshot.placements ?? []) {
     if (all.some((w) => w.panes.includes(p.tmux))) continue;
     const id = placementTarget(p, all, (t) => cwdOf.get(t));
     if (id) all = all.map((w) => (w.id === id ? { ...w, panes: [...w.panes, p.tmux] } : w));
   }
   // Likewise for moves, renames and closes made here that the Mac has not applied yet.
-  for (const op of snapshot.workspaceOps ?? []) {
+  for (const op of [...(snapshot.workspaceOps ?? []), ...(snapshot.hostWorkspaceOps ?? [])]) {
     all = applyWorkspaceOp<string, WorkspaceSummary>(all, op, { tmuxOf: (t) => t, pane: (t) => (cwdOf.has(t) ? t : null), create: (id, name) => ({ id, name, panes: [] }) });
   }
   if (!all.some((w) => w.panes.length)) return [];
@@ -188,7 +193,7 @@ function workspaceScopes(snapshot: Snapshot | null): Scope[] {
     const keys = new Set([...tmux].map(keyOfTmux));
     const has = (s: Session) => { const t = tmuxOf(s); return t ? tmux.has(t) : keys.has(s.key); };
     for (const s of sessions) if (s.live && has(s)) claimed.add(s.key);
-    return make(w.id, w.name, has);
+    return { ...make(w.id, w.name, has), host: hostOf.get(w.id) };
   });
   const other = make('other', 'Other', (s) => !!s.live && !claimed.has(s.key));
   return other.live ? [...scopes, other] : scopes;
@@ -196,25 +201,26 @@ function workspaceScopes(snapshot: Snapshot | null): Scope[] {
 
 function ScopeChips({ scopes, scope, total, onScope, onMenu }: { scopes: Scope[]; scope: Scope | null; total: { live: number; done: number }; onScope: (id: string) => void; onMenu: (id: string) => void }) {
   if (!scopes.length) return null;
-  const chip = (id: string, name: string, live: number, done: number, on: boolean) => (
-    <Chip key={id} id={id} name={name} live={live} done={done} on={on} onScope={onScope} onMenu={id === 'all' || id === 'other' ? undefined : onMenu} />
+  const chip = (id: string, name: string, live: number, done: number, on: boolean, host?: string) => (
+    <Chip key={id} id={id} name={name} live={live} done={done} on={on} host={host} onScope={onScope} onMenu={id === 'all' || id === 'other' ? undefined : onMenu} />
   );
   return (
     <div className="m-chips" role="tablist" aria-label="Workspace">
       {chip('all', 'All', total.live, total.done, !scope)}
-      {scopes.map((x) => chip(x.id, x.name, x.live, x.done, scope?.id === x.id))}
+      {scopes.map((x) => chip(x.id, x.name, x.live, x.done, scope?.id === x.id, x.host))}
     </div>
   );
 }
 
 /** A workspace chip; a long press opens Rename and Close. */
-function Chip({ id, name, live, done, on, onScope, onMenu }: {
-  id: string; name: string; live: number; done: number; on: boolean; onScope: (id: string) => void; onMenu?: (id: string) => void;
+function Chip({ id, name, live, done, on, host, onScope, onMenu }: {
+  id: string; name: string; live: number; done: number; on: boolean; host?: string; onScope: (id: string) => void; onMenu?: (id: string) => void;
 }) {
   const press = useLongPress(onMenu ? () => onMenu(id) : undefined);
   return (
     <button role="tab" aria-selected={on} className={`m-chip ${on ? 'on' : ''} ${id === 'other' ? 'other' : ''}`} onClick={() => onScope(id)} {...press}>
       {done > 0 && <span className="m-chip-wait" aria-label={`${done} need you`} />}
+      {host && <span className="m-chip-host" style={{ background: machineColor(host) }} title={`On ${host}`} aria-label={`on ${host}`} />}
       <span className="m-chip-name">{name}</span>
       {live > 0 && <span className="m-chip-count">{live}</span>}
     </button>
@@ -452,6 +458,8 @@ function NameForm({ initial, action, onSubmit }: { initial: string; action: stri
 function SessionSheet({ s, workspaces, onClose, onKilled }: { s: Session; workspaces: Scope[]; onClose: () => void; onKilled: () => void }) {
   const tmux = tmuxOf(s)!;
   const current = workspaces.find((w) => w.has(s));
+  // A host's workspaces hold only the host's sessions, so offer the workspaces of the session's own machine.
+  const targets = workspaces.filter((w) => (w.host ?? '') === (s.host ?? ''));
   const [naming, setNaming] = useState(false);
   const [killing, setKilling] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -464,14 +472,14 @@ function SessionSheet({ s, workspaces, onClose, onKilled }: { s: Session; worksp
   return (
     <ActionSheet title={s.title || 'Untitled'} sub={`${s.project} · ${current ? current.name : 'in no workspace'}`} onClose={onClose}>
       <h4>Move to</h4>
-      {workspaces.map((w) => (
+      {targets.map((w) => (
         <button key={w.id} className={`m-sheet-item ${w === current ? 'on' : ''}`} onClick={() => (w === current ? onClose() : move(w.id))}>
           <span className="m-sheet-label">{w.name}</span>
           {w === current && <Check />}
         </button>
       ))}
       {naming
-        ? <NameForm initial={s.project} action="Create" onSubmit={(name) => move(newWorkspaceId(), name)} />
+        ? <NameForm initial={s.project} action="Create" onSubmit={(name) => move(s.host ? onHost(s.host, newWorkspaceId()) : newWorkspaceId(), name)} />
         : <button className="m-sheet-item accent" onClick={() => setNaming(true)}>New workspace…</button>}
       {current && <button className="m-sheet-item muted" onClick={() => move(null)}>Remove from {current.name}</button>}
       <div className="m-sheet-sep" />

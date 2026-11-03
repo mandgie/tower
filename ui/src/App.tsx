@@ -325,7 +325,9 @@ export function App() {
     updateWs((ws) => {
       let next = ws;
       for (const op of ready) {
-        const host = splitHost(op.id)?.host ?? '';
+        // The machine of the workspace the change names: a phone on the Mac can change a host's workspace too.
+        const target = op.op === 'move' ? op.to ?? op.tmux : op.workspace;
+        const host = splitHost(target)?.host ?? splitHost(op.id)?.host ?? '';
         next = withMachine(next, host, (mine) => {
           let list = applyWorkspaceOp<Pane, Workspace>(mine, op, {
             tmuxOf: (p) => p.tmux,

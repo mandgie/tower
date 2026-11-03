@@ -496,6 +496,7 @@ html.kb-open .m-dock { padding-bottom: 8px; }
 .m-chip.on { background: var(--fog); color: var(--ink); font-weight: 600; }
 .m-chip.other:not(.on) { background: transparent; border-color: var(--line); border-style: dashed; }
 .m-chip-name { overflow: hidden; text-overflow: ellipsis; }
+.m-chip-host { width: 7px; height: 7px; border-radius: 2px; flex: 0 0 auto; }
 .m-chip-count { font: 12px var(--font-mono); opacity: 0.7; }
 .m-chip-wait { width: 8px; height: 8px; border-radius: 50%; background: var(--wait); box-shadow: 0 0 0 3px rgba(255,209,102,0.22); flex: 0 0 auto; }
 .m-chip.on .m-chip-wait { box-shadow: none; }
