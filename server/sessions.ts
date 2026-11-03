@@ -150,6 +150,19 @@ function parseTmuxName(name: string): { agent: Agent; id: string } | null {
   return { agent: m[1] as Agent, id: m[2] };
 }
 
+const FOLDER_CHECK_MS = 30_000;
+const folderSeen = new Map<string, { exists: boolean; at: number }>();
+
+/** Whether `cwd` is still a folder, checked at most every 30 seconds per path. */
+function folderExists(cwd: string, now: number): boolean {
+  const hit = folderSeen.get(cwd);
+  if (hit && now - hit.at < FOLDER_CHECK_MS) return hit.exists;
+  let exists = false;
+  try { exists = fs.statSync(cwd).isDirectory(); } catch { /* removed */ }
+  folderSeen.set(cwd, { exists, at: now });
+  return exists;
+}
+
 export async function buildSnapshot(): Promise<Snapshot> {
   const settings = loadSettings();
   const [claude, codex, panes] = await Promise.all([
@@ -207,6 +220,8 @@ export async function buildSnapshot(): Promise<Snapshot> {
     }
     if (s.loop && !loopArmed(s, reg, now)) s.loop = undefined;
     if (s.loop && s.status === 'waiting') s.status = 'looping';
+    // A finished session whose folder is gone (a removed worktree, a deleted project) has nothing to come back to.
+    if (!s.live && !folderExists(s.cwd, now)) continue;
     sessions.push(s);
     byKey.set(s.key, s);
   }
