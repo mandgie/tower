@@ -28,6 +28,13 @@ interface Conn {
   closed?: boolean;
 }
 
+/**
+ * A feed can die without a close: after the Mac sleeps or Tailscale changes its route, the socket stays
+ * open here while the host has long dropped it, and the host's sessions would freeze as they last were.
+ * Ping it; a feed that has not answered by the next ping is gone.
+ */
+const PING_MS = 15_000;
+
 const FILE = path.join(APP_DIR, 'hosts.json');
 const CACHE = path.join(APP_DIR, 'hosts-cache.json');
 const COOKIE = 'tower_token';
@@ -53,15 +60,26 @@ function saveCache(): void {
   }, 2000);
 }
 
+/** `x-tower-owner`: the request comes from the Tower that owns the host's workspaces, not from a phone. */
 function headers(c: HostConfig): Record<string, string> {
-  return { cookie: `${COOKIE}=${encodeURIComponent(c.token)}`, origin: c.url };
+  return { cookie: `${COOKIE}=${encodeURIComponent(c.token)}`, origin: c.url, 'x-tower-owner': '1' };
 }
 
 function connect(c: Conn): void {
   if (c.closed) return;
   const ws = new WebSocket(`${c.cfg.url.replace(/^http/, 'ws')}/ws/events?v=2`, { headers: headers(c.cfg), handshakeTimeout: 10_000 });
   c.ws = ws;
-  ws.on('open', () => { c.retry = 1000; });
+  let alive = true;
+  let ping: NodeJS.Timeout | undefined;
+  ws.on('open', () => {
+    c.retry = 1000;
+    ping = setInterval(() => {
+      if (!alive) { c.error = 'The host stopped answering'; ws.terminate(); return; }
+      alive = false;
+      ws.ping();
+    }, PING_MS);
+  });
+  ws.on('pong', () => { alive = true; });
   ws.on('message', (raw) => {
     let m: SnapshotEvent;
     try { m = JSON.parse(raw.toString()); } catch { return; }
@@ -79,6 +97,7 @@ function connect(c: Conn): void {
   });
   ws.on('error', (e) => { c.error = c.error || e.message; });
   ws.on('close', () => {
+    clearInterval(ping);
     if (c.ws !== ws) return;
     if (c.online) console.log(`[hosts] ${c.cfg.name} offline${c.error ? `: ${c.error}` : ''}`);
     c.online = false; c.ws = undefined;
