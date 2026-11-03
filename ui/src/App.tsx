@@ -38,9 +38,9 @@ const keyOfTmux = (tmux: string) => tmux.replace(/^(@[^:]+:)?ms-(claude|codex)-/
 const wsHost = (w: { id: string }) => splitHost(w.id)?.host ?? '';
 const tmuxHost = (tmux: string) => splitHost(tmux)?.host ?? '';
 const agentOfTmux = (tmux: string): Agent => (/(^|:)ms-codex-/.test(tmux) ? 'codex' : 'claude');
-const summaryOf = (w: Workspace): WorkspaceSummary => ({ id: w.id, name: w.name, panes: w.panes.map((p) => p.tmux), ...(w.auto ? { auto: true } : {}), ...(w.todos ? { todos: true } : {}) });
+const summaryOf = (w: Workspace): WorkspaceSummary => ({ id: w.id, name: w.name, panes: w.panes.map((p) => p.tmux), ...(w.auto ? { auto: true } : {}), ...(w.todos ? { todos: true } : {}), ...(w.cols ? { cols: w.cols } : {}) });
 /** A list of workspaces as a host stores it, as one string, to tell whether two lists differ. */
-const canon = (list: WorkspaceSummary[]) => JSON.stringify(list.map((w) => [w.id, w.name, w.panes, !!w.auto, !!w.todos]));
+const canon = (list: WorkspaceSummary[]) => JSON.stringify(list.map((w) => [w.id, w.name, w.panes, !!w.auto, !!w.todos, w.cols ?? 0]));
 /** Apply `fn` to one machine's workspaces and keep the others; the Mac's come first. */
 function withMachine(ws: Workspace[], host: string, fn: (mine: Workspace[]) => Workspace[]): Workspace[] {
   const mine = fn(ws.filter((w) => wsHost(w) === host));
@@ -264,7 +264,7 @@ export function App() {
         next = withMachine(next, h, () => list.map((x): Workspace => {
           const o = old.get(x.id);
           const panes = x.panes.map((t) => o?.panes.find((p) => p.tmux === t) ?? { tmux: t, agent: agentOfTmux(t), openedAt: Date.now() });
-          return { id: x.id, name: x.name, panes, auto: x.auto, todos: x.todos, maximized: o?.maximized && x.panes.includes(o.maximized) ? o.maximized : null };
+          return { id: x.id, name: x.name, panes, auto: x.auto, todos: x.todos, cols: x.cols, maximized: o?.maximized && x.panes.includes(o.maximized) ? o.maximized : null };
         }));
       }
       return { workspaces: next };
@@ -483,7 +483,7 @@ export function App() {
     const panes = active?.panes ?? [];
     if (!panes.length) return;
     const i = Math.max(0, panes.findIndex((p) => p.tmux === focused));
-    const cols = active.maximized ? 1 : gridColumns(panes.length);
+    const cols = active.maximized ? 1 : gridColumns(panes.length, active.cols);
     let j = i;
     if (dir === 'left') j = i - 1; else if (dir === 'right') j = i + 1; else if (dir === 'up') j = i - cols; else j = i + cols;
     if (j < 0 || j >= panes.length) return;
@@ -589,6 +589,7 @@ export function App() {
               onActivate={activateWorkspace} onCreate={createWorkspace} onClose={closeWorkspace}
               editing={renaming} setEditing={setRenaming}
               todoCounts={todoCounts} todosOpen={todosOpen} onTodos={() => setTodosOpen((v) => !v)}
+              onLayout={(id, cols) => updateWs((ws) => ({ workspaces: ws.map((w) => (w.id === id ? { ...w, cols } : w)) }))}
               onRename={(id, name) => updateWs((ws) => ({ workspaces: ws.map((w) => (w.id === id ? { ...w, name, auto: false } : w)) }))} />
           )}
           <div className="stage-row">

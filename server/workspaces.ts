@@ -30,7 +30,7 @@ function clean(raw: unknown): WorkspaceSummary[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((w) => w && typeof w.id === 'string' && typeof w.name === 'string' && Array.isArray(w.panes))
-    .map((w) => ({ id: w.id, name: w.name, panes: w.panes.filter((p: unknown) => typeof p === 'string'), ...(w.auto === true ? { auto: true } : {}), ...(w.todos === true ? { todos: true } : {}) }));
+    .map((w) => ({ id: w.id, name: w.name, panes: w.panes.filter((p: unknown) => typeof p === 'string'), ...(w.auto === true ? { auto: true } : {}), ...(w.todos === true ? { todos: true } : {}), ...(Number.isInteger(w.cols) && w.cols >= 1 && w.cols <= 12 ? { cols: w.cols } : {}) }));
 }
 
 /**

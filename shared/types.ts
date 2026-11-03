@@ -133,6 +133,7 @@ export interface WorkspaceSummary {
   panes: string[];     // tmux names, in grid order
   auto?: boolean;      // a generated name, replaced by the first session's project (kept for workspaces a host stores)
   todos?: boolean;     // the todo finder reads this workspace's Claude sessions (server/todos.ts)
+  cols?: number;       // grid columns the user chose; absent means the grid picks them from the pane count
 }
 
 /**

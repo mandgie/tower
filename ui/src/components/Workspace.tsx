@@ -9,10 +9,15 @@ import { MachineTag } from './Machine';
 export interface Pane { tmux: string; agent: Agent; openedAt?: number }
 /** `auto` marks a generated name that gets replaced by the first session's project. Renaming clears it. */
 /** `todos`: the todo finder reads this workspace's Claude sessions (server/todos.ts). */
-export interface Workspace { id: string; name: string; panes: Pane[]; maximized?: string | null; auto?: boolean; todos?: boolean }
+/** `cols`: the number of columns the user chose for the grid; absent means the grid picks it from the pane count. */
+export interface Workspace { id: string; name: string; panes: Pane[]; maximized?: string | null; auto?: boolean; todos?: boolean; cols?: number }
 export const isAutoName = (w: Workspace) => w.auto === true || /^Workspace \d+$/.test(w.name) || /^[0-9a-f]{8}$/.test(w.name);
 
-export function gridColumns(n: number): number {
+export const COL_CHOICES = [1, 2, 3, 4, 5, 6];
+
+/** Columns for `n` panes. A chosen count never makes more columns than there are panes. */
+export function gridColumns(n: number, chosen?: number): number {
+  if (chosen) return Math.max(1, Math.min(chosen, n));
   if (n <= 1) return 1;
   if (n <= 4) return 2;
   if (n <= 9) return 3;
@@ -25,13 +30,14 @@ export function summarizeStatus(statuses: Status[]): Status | null {
   return statuses.reduce((a, b) => (RANK[a] <= RANK[b] ? a : b));
 }
 
-export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing, onActivate, onCreate, onRename, onClose, todoCounts, todosOpen, onTodos, todosAvailable = true }: {
+export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing, onActivate, onCreate, onRename, onClose, todoCounts, todosOpen, onTodos, todosAvailable = true, onLayout }: {
   workspaces: Workspace[]; activeId: string; byTmux: Map<string, Session>;
   editing: string | null; setEditing: (id: string | null) => void;
   onActivate: (id: string) => void; onCreate: () => void; onRename: (id: string, name: string) => void; onClose: (id: string) => void;
   todoCounts: Map<string, { proposed: number; open: number }>; todosOpen: boolean; onTodos: () => void;
   /** False for a host's workspaces: their todos stay on the host. */
   todosAvailable?: boolean;
+  onLayout: (id: string, cols: number | undefined) => void;
 }) {
   const activeTodos = todoCounts.get(activeId);
   const activeWs = workspaces.find((w) => w.id === activeId);
@@ -67,6 +73,7 @@ export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing
         );
       })}
       <button className="ws-add" onClick={onCreate} title="New workspace">+</button>
+      {activeWs && <LayoutMenu workspace={activeWs} onPick={(cols) => onLayout(activeWs.id, cols)} />}
       {todosAvailable && <button className={`ws-todos ${todosOpen ? 'open' : ''} ${activeWs?.todos ? 'on' : ''}`} onClick={onTodos} title="Todos for this workspace  ⌘⇧T">
         <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3.5l1.2 1.2L5.5 2.4M2 9.5l1.2 1.2 2.3-2.3M7.5 4h4.5M7.5 10h4.5" /></svg>
         Todos
@@ -74,6 +81,64 @@ export function WorkspaceBar({ workspaces, activeId, byTmux, editing, setEditing
         {activeWs?.todos && !(activeTodos?.proposed) && (activeTodos?.open ?? 0) > 0 && <span className="ws-todos-open">{activeTodos!.open}</span>}
       </button>}
     </div>
+  );
+}
+
+/** A small picture of a grid: `cols` columns, filled row by row with `n` cells. */
+function GridIcon({ n, cols }: { n: number; cols: number }) {
+  const rows = Math.max(1, Math.ceil(n / cols));
+  const W = 22, H = 14, g = 1.5;
+  const w = (W - g * (cols - 1)) / cols, h = (H - g * (rows - 1)) / rows;
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden>
+      {Array.from({ length: Math.max(n, 1) }, (_, i) => (
+        <rect key={i} x={(i % cols) * (w + g)} y={Math.floor(i / cols) * (h + g)} width={w} height={h} rx={1.2} fill="currentColor" />
+      ))}
+    </svg>
+  );
+}
+
+/** Picks how many columns the active workspace's grid has. Auto follows the pane count. */
+function LayoutMenu({ workspace, onPick }: { workspace: Workspace; onPick: (cols: number | undefined) => void }) {
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const n = workspace.panes.length;
+  const current = gridColumns(n, workspace.cols);
+  useEffect(() => {
+    if (!at) return;
+    const close = (e: Event) => { if (!(e.target as Element).closest?.('.layout-menu, .ws-layout')) setAt(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setAt(null); };
+    window.addEventListener('mousedown', close); window.addEventListener('keydown', esc); window.addEventListener('resize', close);
+    return () => { window.removeEventListener('mousedown', close); window.removeEventListener('keydown', esc); window.removeEventListener('resize', close); };
+  }, [at]);
+  const pick = (cols: number | undefined) => { onPick(cols); setAt(null); };
+  const rowsOf = (c: number) => Math.max(1, Math.ceil(n / gridColumns(n, c)));
+  return (
+    <>
+      <button className={`ws-layout ${at ? 'open' : ''}`} title="Grid layout for this workspace"
+        onClick={(e) => {
+          if (at) { setAt(null); return; }
+          const r = e.currentTarget.getBoundingClientRect();
+          setAt({ top: r.bottom + 4, right: window.innerWidth - r.right });
+        }}>
+        <GridIcon n={Math.max(n, 1)} cols={current} />
+        {workspace.cols ? `${current} × ${Math.max(1, Math.ceil(n / current))}` : 'Auto'}
+      </button>
+      {at && (
+        <div className="layout-menu" role="menu" style={{ top: at.top, right: at.right }}>
+          <button role="menuitemradio" aria-checked={!workspace.cols} className={!workspace.cols ? 'on' : ''} onClick={() => pick(undefined)}>
+            <GridIcon n={Math.max(n, 1)} cols={gridColumns(n)} />
+            <span>Auto</span><small>picks from the pane count</small>
+          </button>
+          {COL_CHOICES.map((c) => (
+            <button key={c} role="menuitemradio" aria-checked={workspace.cols === c} className={workspace.cols === c ? 'on' : ''} onClick={() => pick(c)}>
+              <GridIcon n={Math.max(n, 1)} cols={gridColumns(Math.max(n, 1), c)} />
+              <span>{c} {c === 1 ? 'column' : 'columns'}</span>
+              <small>{n > 1 ? `${gridColumns(n, c)} × ${rowsOf(c)}` : ''}</small>
+            </button>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -98,7 +163,7 @@ export function PaneGrid({ workspace, byTmux, lost, resumeErrors, onResumeLost, 
 }) {
   const panes = workspace.panes;
   const max = workspace.maximized && panes.some((p) => p.tmux === workspace.maximized) ? workspace.maximized : null;
-  const cols = max ? 1 : gridColumns(panes.length);
+  const cols = max ? 1 : gridColumns(panes.length, workspace.cols);
   // Cells the last row leaves empty; they always sit in that row, so one tile spans them.
   const spare = max || !panes.length ? 0 : (cols - (panes.length % cols)) % cols;
   // Same source as ⌘D: the focused pane, else the first pane with a known session.
