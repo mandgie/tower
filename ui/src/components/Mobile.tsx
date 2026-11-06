@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { Agent, Session, Snapshot, TodoScan, WorkspaceSummary, WorkspaceOpRequest } from '../../../shared/types';
 import { placementTarget, applyWorkspaceOp } from '../../../shared/snapshot';
-import { onHost } from '../../../shared/hosts';
+import { onHost, splitHost } from '../../../shared/hosts';
 import { api, relTime, useNow, useSnapshot, usePresent, useViewing, type LaunchBody } from '../api';
 import { statusWord } from './StatusStrip';
 import { ContextBadge } from './ContextBadge';
@@ -10,7 +10,7 @@ import { Transcript } from './Transcript';
 import { TerminalPane } from './Terminal';
 import { useDragScroll } from './dragScroll';
 import { useVisualViewportHeight } from './viewport';
-import { MachineTag, machineColor } from './Machine';
+import { ALL, MachineFilterBar, MachineTag, inMachine, machineColor, type MachineFilter } from './Machine';
 import { NewSession } from './NewSession';
 import { TodoPanel } from './TodoPanel';
 
@@ -24,6 +24,7 @@ import { TodoPanel } from './TodoPanel';
 const LAYOUT_KEY = 'ms.layout';
 const TAB_KEY = 'ms.mobileTab';
 const FILTER_KEY = 'ms.mobileWorkspace';
+const MACHINE_KEY = 'ms.mobileMachine';
 const RECENT_PAGE = 12;
 /** The hash key of the todo screen; session keys never start with a colon. */
 const TODOS = ':todos';
@@ -88,17 +89,23 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   const setFilter = (f: string) => { localStorage.setItem(FILTER_KEY, f); setFilterState(f); };
   useVisualViewportHeight();
 
-  const sessions = snapshot?.sessions ?? [];
-  const done = sessions.filter((s) => s.live && s.status === 'done').length;
+  const allSessions = snapshot?.sessions ?? [];
+  // The machine switch: All, this Mac, or one host. A host that is no longer paired falls back to All.
+  const hosts = snapshot?.hosts ?? [];
+  const [machine, setMachineState] = useState<MachineFilter>(() => localStorage.getItem(MACHINE_KEY) ?? ALL);
+  const setMachine = (m: MachineFilter) => { localStorage.setItem(MACHINE_KEY, m); setMachineState(m); };
+  const machineShown = machine === ALL || machine === '' || hosts.some((h) => h.name === machine) ? machine : ALL;
+  const sessions = useMemo(() => allSessions.filter((s) => inMachine(machineShown, s)), [allSessions, machineShown]);
+  const done = allSessions.filter((s) => s.live && s.status === 'done').length;
   useEffect(() => { document.title = done ? `(${done}) Tower` : 'Tower'; }, [done]);
 
-  const session = key ? sessions.find((s) => s.key === key) : undefined;
+  const session = key ? allSessions.find((s) => s.key === key) : undefined;
   useViewing(session ? [session.key] : [], usePresent(false));
-  const scopes = useMemo(() => workspaceScopes(snapshot), [snapshot]);
+  const scopes = useMemo(() => workspaceScopes(snapshot, machineShown), [snapshot, machineShown]);
   const scope = scopes.find((x) => x.id === filter) ?? null;
 
   const workspaces = scopes.filter((x) => x.id !== 'other');
-  const sheetSession = sheet?.kind === 'session' ? sessions.find((s) => s.key === sheet.key && tmuxOf(s)) : undefined;
+  const sheetSession = sheet?.kind === 'session' ? allSessions.find((s) => s.key === sheet.key && tmuxOf(s)) : undefined;
   const sheetWorkspace = sheet?.kind === 'workspace' ? workspaces.find((x) => x.id === sheet.id) : undefined;
   const menuFor = (s: Session) => setSheet({ kind: 'session', key: s.key });
   const todoView = useMemo(() => todoScope(snapshot, scope), [snapshot, scope]);
@@ -111,14 +118,17 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
     setNewOpen(false);
     if (r.key) open(r.key);
   };
+  // A new session starts in the chip's folder; with a host picked and no chip, in that host's latest folder.
+  const newCwd = scope?.cwd ?? (machineShown && machineShown !== ALL ? [...sessions].sort((x, y) => y.updatedAt - x.updatedAt)[0]?.cwd : undefined);
   // Side by side, the list stays put and picking another session replaces the one shown.
   const open = (k: string) => go(k, split && !!key);
 
   const list = (
     <SessionList sessions={sessions} scopes={scopes} scope={scope} onScope={setFilter} loaded={!!snapshot} connected={connected} onOpen={(s) => open(s.key)} onMenu={menuFor} onScopeMenu={(id) => setSheet({ kind: 'workspace', id })} onNew={() => setNewOpen(true)} onDesktop={onDesktop}
+      machines={hosts.length ? <MachineFilterBar hosts={hosts} sessions={allSessions} value={machineShown} onChange={setMachine} /> : null}
       todos={todoView.on.length ? todoView.todos.filter((t) => t.status === 'proposed').length : null} onTodos={() => open(TODOS)} selected={split ? key : null} />
   );
-  const detail = key === TODOS ? <TodoScreen view={todoView} sessions={sessions} connected={connected} onOpen={(s) => open(s.key)} onBack={() => go(null)} />
+  const detail = key === TODOS ? <TodoScreen view={todoView} sessions={allSessions} connected={connected} onOpen={(s) => open(s.key)} onBack={() => go(null)} />
     : key && session ? <SessionView s={session} connected={connected} onBack={split ? undefined : () => go(null)} onMenu={() => menuFor(session)} wide={split} />
     : key && snapshot ? <div className="m-empty"><p>That session is gone.</p><button className="btn" onClick={() => go(null)}>Back to the list</button></div>
     : null;
@@ -134,7 +144,7 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
       {sheetSession && <SessionSheet s={sheetSession} workspaces={workspaces} onClose={() => setSheet(null)}
         onKilled={() => { setSheet(null); if (key === sheetSession.key) go(null); }} />}
       {sheetWorkspace && <WorkspaceSheet w={sheetWorkspace} onClose={() => setSheet(null)} />}
-      {newOpen && <NewSession preset={scope?.cwd ? { cwd: scope.cwd } : {}} projects={snapshot?.projects ?? []} hosts={snapshot?.hosts} onClose={() => setNewOpen(false)} onLaunch={launch} mobile />}
+      {newOpen && <NewSession preset={newCwd ? { cwd: newCwd } : {}} projects={snapshot?.projects ?? []} hosts={snapshot?.hosts} onClose={() => setNewOpen(false)} onLaunch={launch} mobile />}
     </div>
   );
 }
@@ -158,16 +168,17 @@ const tmuxOf = (s: Session) => (s.live?.kind === 'tmux' ? s.live.tmux : null);
 /** `ms-claude-<id>` -> `claude:<id>`, to match a pane whose session is no longer running. */
 const keyOfTmux = (tmux: string) => tmux.replace(/^ms-(claude|codex)-/, '$1:');
 
-function workspaceScopes(snapshot: Snapshot | null): Scope[] {
+/** The machine a workspace is on: '' for this Mac, else the host in its `@host:` id. */
+const wsMachine = (id: string) => splitHost(id)?.host ?? '';
+
+function workspaceScopes(snapshot: Snapshot | null, machine: MachineFilter = ALL): Scope[] {
   if (!snapshot) return [];
   const renamed = snapshot.renamed ?? {};
   const follow = (t: string) => { for (let i = 0; i < 8 && renamed[t]; i++) t = renamed[t]; return t; };
-  const sessions = snapshot.sessions;
+  const sessions = snapshot.sessions.filter((s) => inMachine(machine, s));
   // Show a session the phone just started in its workspace now, rather than once the Mac has placed it.
   const cwdOf = new Map(sessions.flatMap((s) => (tmuxOf(s) ? [[tmuxOf(s)!, s.cwd] as const] : [])));
   // The Mac's workspaces first, then each host's (their ids and panes carry `@host:`).
-  const hostOf = new Map<string, string>();
-  for (const [h, list] of Object.entries(snapshot.hostWorkspaces ?? {})) for (const w of list) hostOf.set(w.id, h);
   let all = [...(snapshot.workspaces ?? []), ...Object.values(snapshot.hostWorkspaces ?? {}).flat()].map((w) => ({ ...w, panes: w.panes.map(follow) }));
   for (const p of snapshot.placements ?? []) {
     if (all.some((w) => w.panes.includes(p.tmux))) continue;
@@ -178,6 +189,7 @@ function workspaceScopes(snapshot: Snapshot | null): Scope[] {
   for (const op of [...(snapshot.workspaceOps ?? []), ...(snapshot.hostWorkspaceOps ?? [])]) {
     all = applyWorkspaceOp<string, WorkspaceSummary>(all, op, { tmuxOf: (t) => t, pane: (t) => (cwdOf.has(t) ? t : null), create: (id, name) => ({ id, name, panes: [] }) });
   }
+  if (machine !== ALL) all = all.filter((w) => wsMachine(w.id) === machine);
   if (!all.some((w) => w.panes.length)) return [];
   const claimed = new Set<string>();
   const make = (id: string, name: string, has: (s: Session) => boolean): Scope => {
@@ -193,7 +205,7 @@ function workspaceScopes(snapshot: Snapshot | null): Scope[] {
     const keys = new Set([...tmux].map(keyOfTmux));
     const has = (s: Session) => { const t = tmuxOf(s); return t ? tmux.has(t) : keys.has(s.key); };
     for (const s of sessions) if (s.live && has(s)) claimed.add(s.key);
-    return { ...make(w.id, w.name, has), host: hostOf.get(w.id) };
+    return { ...make(w.id, w.name, has), host: wsMachine(w.id) || undefined };
   });
   const other = make('other', 'Other', (s) => !!s.live && !claimed.has(s.key));
   return other.live ? [...scopes, other] : scopes;
@@ -229,13 +241,14 @@ function Chip({ id, name, live, done, on, host, onScope, onMenu }: {
 
 // ---- list ------------------------------------------------------------------------------------
 
-function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOpen, onMenu, onScopeMenu, onNew, onDesktop, todos, onTodos, selected }: {
+function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOpen, onMenu, onScopeMenu, onNew, onDesktop, todos, onTodos, selected, machines }: {
   sessions: Session[]; scopes: Scope[]; scope: Scope | null; onScope: (id: string) => void;
   loaded: boolean; connected: boolean; onOpen: (s: Session) => void; onMenu: (s: Session) => void; onScopeMenu: (id: string) => void;
   onNew: () => void; onDesktop: () => void;
   todos: number | null;  // proposals waiting in the chip's workspaces; null when no workspace finds todos
   onTodos: () => void;
   selected: string | null;  // the session shown beside the list
+  machines: ReactNode;      // the machine switch, when there is a host
 }) {
   const now = useNow();
   const [recentShown, setRecentShown] = useState(RECENT_PAGE);
@@ -272,6 +285,7 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
         )}
         <button className="m-icon-btn" onClick={onNew} aria-label="New session">+</button>
       </header>
+      {machines && <div className="m-machines">{machines}</div>}
       <ScopeChips scopes={scopes} scope={scope} total={total} onScope={onScope} onMenu={onScopeMenu} />
       <div className="m-scroll">
         {!loaded && <div className="m-note">Reading sessions…</div>}

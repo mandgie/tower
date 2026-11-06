@@ -489,6 +489,10 @@ html.kb-open .m-dock { padding-bottom: 8px; }
 .m-latest { position: absolute; z-index: 2; right: 22px; bottom: 12px; padding: 7px 14px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line); color: var(--fog); font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,0.4); }
 
 /* ---------- phone: workspace chips ---------- */
+.m-machines { flex: 0 0 auto; padding: 10px 16px 0; background: var(--panel); }
+.m-machines .machine-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 6px; }
+.m-machines .machine-pick { height: 30px; padding: 0 12px; font-size: 13px; gap: 7px; flex: 0 0 auto; }
+.m-machines .machine-dot { width: 8px; height: 8px; flex-basis: 8px; }
 .m-chips { flex: 0 0 auto; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .m-chips::-webkit-scrollbar { display: none; }
 .m-chip { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border-radius: 16px; background: var(--raised); border: 1px solid transparent; color: var(--mist); font-size: 14px; white-space: nowrap; max-width: 180px; }
