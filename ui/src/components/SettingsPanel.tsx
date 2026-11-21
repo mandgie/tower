@@ -4,7 +4,7 @@ import { api } from '../api';
 import { RemoteAccess } from './RemoteAccess';
 import { Hosts } from './Hosts';
 
-export function SettingsPanel({ onClose, onDoctor }: { onClose: () => void; onDoctor?: () => void }) {
+export function SettingsPanel({ onClose, onDoctor, wsPlace, onWsPlace }: { onClose: () => void; onDoctor?: () => void; wsPlace: 'side' | 'top'; onWsPlace: (p: 'side' | 'top') => void }) {
   const [s, setS] = useState<Settings | null>(null);
   const [saved, setSaved] = useState(false);
   useEffect(() => { api.settings().then(setS); }, []);
@@ -26,6 +26,8 @@ export function SettingsPanel({ onClose, onDoctor }: { onClose: () => void; onDo
           Show Codex threads that were imported from Claude <span className="muted">(duplicates)</span></label>
         <label className="check"><input type="checkbox" checked={s.trustFolders} onChange={(e) => setS({ ...s, trustFolders: e.target.checked })} />
           Trust every folder Claude starts in <span className="muted">(skips “Do you trust this folder?”)</span></label>
+        <label className="check"><input type="checkbox" checked={wsPlace === 'side'} onChange={(e) => onWsPlace(e.target.checked ? 'side' : 'top')} />
+          List the workspaces in the sidebar <span className="muted">(off: tabs above the grid)</span></label>
         <RemoteAccess s={s} onChange={(patch) => setS({ ...s, ...patch })} />
         <Hosts />
         {!window.multisession && (

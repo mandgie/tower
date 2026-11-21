@@ -197,6 +197,9 @@ export interface TodoScan {
  * A session that was running when its tmux server went away (shutdown, crash, empty battery). Its pane
  * stays in the workspace and the desktop resumes it. `id` is the conversation to resume, which can differ
  * from the id in the tmux name after /clear.
+ *
+ * `paused`: the user stopped the process on purpose and kept the pane (pauseTmux in server/sessions.ts).
+ * A paused session waits for a Resume click; it is never resumed automatically and never expires.
  */
 export interface LostSession {
   tmux: string;
@@ -204,6 +207,7 @@ export interface LostSession {
   id: string;
   cwd: string;
   at: number;          // when the server noticed
+  paused?: boolean;
 }
 
 export interface Placement {

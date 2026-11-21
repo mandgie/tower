@@ -234,6 +234,16 @@ html.kb-open .app { height: var(--vvh); }
 .pane-actions button.kill:hover { color: var(--danger); }
 .pane-actions button.kill.armed { background: var(--danger); color: #1A0A0B; }
 .pane-body { flex: 1; min-height: 0; position: relative; }
+.pane.paused .pane-head .dot { background: transparent !important; border: 1.5px solid var(--dim); animation: none; box-shadow: none; }
+.pane.paused .pane-project, .pane.paused .pane-title { color: var(--mist); }
+.pane-actions button.pause.armed { background: var(--wait); color: #1A1405; }
+.pane-paused h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--fog); max-width: 46ch; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pane-paused p { margin: 0; }
+.pane-paused-mark { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); color: var(--dim); }
+.pane-paused-meta { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+.pane-paused-prompt { max-width: 52ch; font-size: 12px; color: var(--mist); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.pane-paused-error { color: var(--danger); font-size: 12px; }
+.pane-paused small { font-size: 11px; color: var(--dim); }
 .pane-lost { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center; color: var(--mist); }
 
 .session-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
@@ -546,6 +556,11 @@ html.kb-open .m-dock { padding-bottom: 8px; }
 .ws-todo-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--wait); }
 .ws-todos { margin-left: 2px; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 6px; color: var(--dim); font-size: 12px; font-weight: 500; flex: 0 0 auto; margin-bottom: 4px; }
 .ws-layout { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 9px; border-radius: 6px; color: var(--dim); font: 500 12px var(--font-ui); flex: 0 0 auto; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.ws.asleep:not(.active) { opacity: 0.6; }
+.ws-asleep { display: inline-flex; align-items: center; color: var(--dim); }
+.ws-pause { margin-left: 2px; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 6px; color: var(--dim); font-size: 12px; font-weight: 500; flex: 0 0 auto; margin-bottom: 4px; white-space: nowrap; }
+.ws-pause:hover { background: var(--raised); color: var(--fog); }
+.ws-pause.armed { background: var(--wait); color: #1A1405; }
 .ws-layout:hover, .ws-layout.open { background: var(--raised); color: var(--fog); }
 .layout-menu { position: fixed; z-index: 25; min-width: 220px; padding: 4px; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); display: flex; flex-direction: column; }
 .layout-menu button { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 5px; color: var(--mist); font-size: 12px; text-align: left; }
@@ -678,3 +693,78 @@ button.todo-check:hover { border-color: var(--codex); background: rgba(127,224,2
 .m-split .m-sheet-head { padding-top: 8px; }
 .m-split .m-modal { place-items: center; }
 .m-split .m-modal .modal { width: 560px; max-width: calc(100% - 48px); max-height: calc(100% - 48px); border-width: 1px; border-radius: 16px; padding-bottom: 18px; }
+
+/* ---------- workspace list in the sidebar (components/WorkspaceList.tsx) ---------- */
+.wl { display: flex; flex-direction: column; gap: 1px; padding-top: 2px; }
+.wl-group { display: flex; flex-direction: column; }
+.wl-ws { display: flex; align-items: center; gap: 7px; min-width: 0; height: 30px; padding: 0 6px 0 2px; border-radius: 6px; color: var(--mist); font-size: 12.5px; cursor: default; user-select: none; border: 1px solid transparent; }
+.wl-ws:hover { background: var(--raised); color: var(--fog); }
+.wl-ws.active { background: var(--hover); color: var(--fog); }
+.wl-ws.asleep { color: var(--dim); }
+.wl-ws.asleep.active, .wl-ws.asleep:hover { color: var(--mist); }
+.wl-ws.drop-target { border-color: var(--fog); border-style: dashed; }
+.wl-caret { flex: 0 0 16px; width: 16px; height: 22px; font-size: 10px; color: var(--dim); border-radius: 4px; transition: transform 120ms; }
+.wl-caret.open { transform: rotate(90deg); }
+.wl-caret:hover:not(:disabled) { color: var(--fog); }
+.wl-caret:disabled { visibility: hidden; }
+.wl-ws > .dot { width: 7px; height: 7px; background: var(--mist); }
+.wl-ws > .dot.status-working { background: var(--claude); }
+.wl-ws > .dot.wl-empty-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--dim); }
+.wl-mark { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 7px; color: var(--dim); }
+.wl-mark svg { width: 8px; height: 8px; }
+.wl-name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-rename { flex: 1; min-width: 0; font-size: 12.5px; padding: 1px 4px; }
+.wl-needs { flex: 0 0 auto; font: 600 10px var(--font-mono); padding: 1px 6px; border-radius: 999px; background: var(--wait); color: #1A1208; }
+.wl-count { flex: 0 0 auto; min-width: 14px; text-align: right; font-family: var(--font-mono); font-size: 10.5px; color: var(--dim); }
+.wl-actions { display: none; flex: 0 0 auto; gap: 1px; }
+.wl-ws:hover .wl-actions { display: flex; }
+.wl-ws:hover .wl-count { display: none; }
+.wl-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 4px; color: var(--dim); font-size: 14px; line-height: 1; }
+.wl-actions button:hover { background: var(--ink); color: var(--fog); }
+.wl-actions button.armed { background: var(--danger); color: #1A0A0B; font: 600 10.5px var(--font-mono); padding: 0 6px; }
+.wl-pane { display: flex; align-items: center; gap: 8px; min-width: 0; height: 26px; margin-left: 17px; padding: 0 6px 0 9px; border-radius: 5px; border-left: 1px solid var(--line); border-top-left-radius: 0; border-bottom-left-radius: 0; color: var(--mist); font-size: 12px; text-align: left; }
+.wl-pane:hover { background: var(--raised); color: var(--fog); }
+.wl-pane.focused { color: var(--fog); background: var(--raised); }
+.wl-pane.agent-claude.focused { border-left-color: var(--claude); }
+.wl-pane.agent-codex.focused { border-left-color: var(--codex); }
+.wl-pane .dot { width: 6px; height: 6px; }
+.wl-pane.status-waiting .dot, .wl-pane.status-idle .dot { opacity: 0.45; }
+.wl-pane-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-pane-status { flex: 0 0 auto; font-family: var(--font-mono); font-size: 10px; color: var(--dim); }
+.wl-pane.status-done .wl-pane-status { color: var(--wait); }
+.wl-pane.status-working .wl-pane-status { color: var(--mist); }
+.wl-pane.paused { color: var(--dim); }
+.wl-section { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 6px 6px 4px 5px; color: var(--dim); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; border-top: 1px solid var(--line); border-radius: 0; text-align: left; }
+.wl-section:hover { color: var(--mist); }
+.wl-section-count { margin-left: auto; font-family: var(--font-mono); font-weight: 400; letter-spacing: 0; }
+.wl-add { margin-top: 6px; height: 28px; padding: 0 8px; border-radius: 6px; color: var(--dim); font-size: 12px; text-align: left; }
+.wl-add:hover { background: var(--raised); color: var(--fog); }
+/* The bar above the grid when the sidebar lists the workspaces: the name of the one on screen, then its actions. */
+.wsbar.wsbar-head { padding: 5px 8px 1px 14px; }
+.ws-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; margin-bottom: 4px; }
+.ws-title .ws-name { font-size: 13px; color: var(--fog); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-title-sub { font-family: var(--font-mono); font-size: 10.5px; color: var(--dim); white-space: nowrap; }
+
+/* ---------- phone: the workspace list on the home screen (components/Mobile.tsx) ---------- */
+.m-ws { width: 100%; display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 9px 16px; text-align: left; border-bottom: 1px solid rgba(42,53,64,0.6); -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.m-ws:active { background: var(--hover); }
+.m-ws-mark { flex: 0 0 14px; display: grid; place-items: center; color: var(--dim); }
+.m-ws-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--dim); }
+.m-ws-dot.live { background: var(--mist); box-shadow: none; }
+.m-ws-dot.working { background: var(--claude); box-shadow: none; animation: pulse 1.4s ease-in-out infinite; }
+.m-ws-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.m-ws-name { display: flex; align-items: center; gap: 7px; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-ws-sub { font-size: 12.5px; color: var(--mist); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-ws.asleep .m-ws-name { color: var(--mist); font-weight: 500; }
+.m-ws.asleep .m-ws-sub { color: var(--dim); }
+.m-ws.other .m-ws-name { font-weight: 500; color: var(--mist); }
+.m-ws-needs { flex: 0 0 auto; min-width: 22px; text-align: center; font: 600 12px var(--font-mono); padding: 2px 7px; border-radius: 999px; background: var(--wait); color: #1A1208; }
+.m-ws-go { flex: 0 0 auto; color: var(--dim); }
+.m-group-toggle { display: flex; align-items: center; gap: 8px; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; padding: 6px 12px 6px 0; margin: -6px 0; }
+.m-all-link { width: 100%; display: flex; align-items: center; justify-content: space-between; margin-top: 14px; padding: 14px 16px; font-size: 15px; color: var(--mist); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.m-all-link span { font-size: 12.5px; color: var(--dim); }
+.m-all-link:active { background: var(--hover); }
+.m-title-list { flex: 0 1 auto; }
+.m-title-list .m-title-main { font-size: 17px; font-weight: 700; }
+.m-status.status-paused { color: var(--dim); }
+.m-sheet-hint { flex: 0 0 auto; font-size: 12.5px; color: var(--dim); }

@@ -1,16 +1,20 @@
-import { memo, useCallback, useMemo, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Snapshot, Session, Agent, Project } from '../../../shared/types';
 import { relTime, useNow } from '../api';
 import { statusWord } from './StatusStrip';
 import { ALL, MachineFilterBar, MachineTag, inMachine, machineColor, machineState, type MachineFilter } from './Machine';
 import { splitHost } from '../../../shared/hosts';
 
-export function Sidebar({ snapshot, machine, onMachine, view, onView, search, onSearch, searchRef, selectedKey, onSelect, onNew, onSettings }: {
+export type SidebarView = 'workspaces' | 'project' | 'recent';
+
+export function Sidebar({ workspaces, snapshot, machine, onMachine, view, onView, search, onSearch, searchRef, selectedKey, onSelect, onNew, onSettings }: {
+  /** The workspace list, when the sidebar shows the workspaces (ui/src/components/WorkspaceList.tsx); absent with the tab bar. */
+  workspaces?: ReactNode;
   snapshot: Snapshot | null;
   machine: MachineFilter;
   onMachine: (m: MachineFilter) => void;
-  view: 'project' | 'recent';
-  onView: (v: 'project' | 'recent') => void;
+  view: SidebarView;
+  onView: (v: SidebarView) => void;
   search: string;
   onSearch: (s: string) => void;
   searchRef: RefObject<HTMLInputElement>;
@@ -73,13 +77,16 @@ export function Sidebar({ snapshot, machine, onMachine, view, onView, search, on
           onKeyDown={(e) => { if (e.key === 'Escape') { onSearch(''); (e.target as HTMLInputElement).blur(); } }} />
         {hosts.length > 0 && <MachineFilterBar hosts={hosts} sessions={sessions} value={machine} onChange={onMachine} />}
         <div className="seg" role="tablist">
+          {workspaces && <button role="tab" aria-selected={view === 'workspaces'} className={view === 'workspaces' ? 'on' : ''} onClick={() => onView('workspaces')}>Workspaces</button>}
           <button role="tab" aria-selected={view === 'project'} className={view === 'project' ? 'on' : ''} onClick={() => onView('project')}>Projects</button>
           <button role="tab" aria-selected={view === 'recent'} className={view === 'recent' ? 'on' : ''} onClick={() => onView('recent')}>Recent</button>
         </div>
       </div>
 
       <div className="list">
-        {view === 'recent' ? (
+        {view === 'workspaces' && !q ? workspaces
+        // A search from the workspace list looks through every session, like Recent.
+        : view === 'recent' || view === 'workspaces' ? (
           filtered.slice(0, 200).map((s) => <Row key={s.key} s={s} now={now} showProject selected={selectedKey === s.key} onSelect={select} />)
         ) : (
           machines.map((m) => {

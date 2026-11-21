@@ -10,6 +10,7 @@ import { Transcript } from './Transcript';
 import { TerminalPane } from './Terminal';
 import { useDragScroll } from './dragScroll';
 import { useVisualViewportHeight } from './viewport';
+import { PauseIcon } from './Workspace';
 import { ALL, MachineFilterBar, MachineTag, inMachine, machineColor, type MachineFilter } from './Machine';
 import { NewSession } from './NewSession';
 import { TodoPanel } from './TodoPanel';
@@ -23,7 +24,10 @@ import { TodoPanel } from './TodoPanel';
 
 const LAYOUT_KEY = 'ms.layout';
 const TAB_KEY = 'ms.mobileTab';
-const FILTER_KEY = 'ms.mobileWorkspace';
+/** What the list shows: 'home' (what needs you, then the workspaces), 'all' (every session), a workspace id, or 'other'. */
+const FILTER_KEY = 'ms.mobileScope';
+const HOME = 'home';
+const PAUSED_SHUT_KEY = 'ms.mobilePausedShut';
 const MACHINE_KEY = 'ms.mobileMachine';
 const RECENT_PAGE = 12;
 /** The hash key of the todo screen; session keys never start with a colon. */
@@ -85,7 +89,7 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   const split = useSplit();
   const [newOpen, setNewOpen] = useState(false);
   const [sheet, setSheet] = useState<Sheet | null>(null);
-  const [filter, setFilterState] = useState(() => localStorage.getItem(FILTER_KEY) || 'all');
+  const [filter, setFilterState] = useState(() => localStorage.getItem(FILTER_KEY) || HOME);
   const setFilter = (f: string) => { localStorage.setItem(FILTER_KEY, f); setFilterState(f); };
   useVisualViewportHeight();
 
@@ -103,6 +107,10 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   useViewing(session ? [session.key] : [], usePresent(false));
   const scopes = useMemo(() => workspaceScopes(snapshot, machineShown), [snapshot, machineShown]);
   const scope = scopes.find((x) => x.id === filter) ?? null;
+  // Home lists the workspaces. Without any it would be empty, and a workspace that is gone leads back to it.
+  const home = scopes.length > 0 && !scope && filter !== 'all';
+  // Paused sessions: stopped on purpose, their pane kept (server pauseTmux). Keyed by session, for the rows and Resume.
+  const pausedTmux = useMemo(() => new Map(scopes.flatMap((x) => x.paused.map((p) => [p.s.key, p.tmux] as const))), [scopes]);
 
   const workspaces = scopes.filter((x) => x.id !== 'other');
   const sheetSession = sheet?.kind === 'session' ? allSessions.find((s) => s.key === sheet.key && tmuxOf(s)) : undefined;
@@ -124,12 +132,12 @@ export function MobileApp({ onDesktop }: { onDesktop: () => void }) {
   const open = (k: string) => go(k, split && !!key);
 
   const list = (
-    <SessionList sessions={sessions} scopes={scopes} scope={scope} onScope={setFilter} loaded={!!snapshot} connected={connected} onOpen={(s) => open(s.key)} onMenu={menuFor} onScopeMenu={(id) => setSheet({ kind: 'workspace', id })} onNew={() => setNewOpen(true)} onDesktop={onDesktop}
+    <SessionList sessions={sessions} scopes={scopes} scope={scope} home={home} pausedTmux={pausedTmux} onScope={setFilter} loaded={!!snapshot} connected={connected} onOpen={(s) => open(s.key)} onMenu={menuFor} onScopeMenu={(id) => setSheet({ kind: 'workspace', id })} onNew={() => setNewOpen(true)} onDesktop={onDesktop}
       machines={hosts.length ? <MachineFilterBar hosts={hosts} sessions={allSessions} value={machineShown} onChange={setMachine} /> : null}
       todos={todoView.on.length ? todoView.todos.filter((t) => t.status === 'proposed').length : null} onTodos={() => open(TODOS)} selected={split ? key : null} />
   );
   const detail = key === TODOS ? <TodoScreen view={todoView} sessions={allSessions} connected={connected} onOpen={(s) => open(s.key)} onBack={() => go(null)} />
-    : key && session ? <SessionView s={session} connected={connected} onBack={split ? undefined : () => go(null)} onMenu={() => menuFor(session)} wide={split} />
+    : key && session ? <SessionView s={session} pausedTmux={pausedTmux.get(session.key)} connected={connected} onBack={split ? undefined : () => go(null)} onMenu={() => menuFor(session)} wide={split} />
     : key && snapshot ? <div className="m-empty"><p>That session is gone.</p><button className="btn" onClick={() => go(null)}>Back to the list</button></div>
     : null;
 
@@ -162,6 +170,10 @@ interface Scope {
   cwd?: string;        // where a new session from this chip starts: the most recently active member's folder
   live: number;
   done: number;        // live sessions with a turn nobody has read
+  working: number;
+  liveTmux: string[];  // its running panes, for Pause all
+  /** Its paused panes whose conversation is known, in pane order. */
+  paused: { tmux: string; s: Session }[];
 }
 
 const tmuxOf = (s: Session) => (s.live?.kind === 'tmux' ? s.live.tmux : null);
@@ -192,57 +204,68 @@ function workspaceScopes(snapshot: Snapshot | null, machine: MachineFilter = ALL
   if (machine !== ALL) all = all.filter((w) => wsMachine(w.id) === machine);
   if (!all.some((w) => w.panes.length)) return [];
   const claimed = new Set<string>();
-  const make = (id: string, name: string, has: (s: Session) => boolean): Scope => {
+  const byKey = new Map(snapshot.sessions.map((s) => [s.key, s]));
+  const running = new Set(cwdOf.keys());
+  // tmux name -> the conversation of a paused pane. A session that runs again is not paused.
+  const pausedAt = new Map<string, Session>();
+  for (const l of snapshot.lost ?? []) {
+    if (!l.paused || running.has(l.tmux)) continue;
+    const h = splitHost(l.id);
+    const s = byKey.get(h ? onHost(h.host, `${l.agent}:${h.name}`) : `${l.agent}:${l.id}`);
+    if (s && !s.live) pausedAt.set(l.tmux, s);
+  }
+  const make = (id: string, name: string, has: (s: Session) => boolean, panes: string[] = []): Scope => {
     const members = sessions.filter(has).sort((a, b) => b.updatedAt - a.updatedAt);
     const live = members.filter((s) => s.live);
+    const paused = panes.flatMap((t) => (pausedAt.has(t) ? [{ tmux: t, s: pausedAt.get(t)! }] : []));
     return {
-      id, name, has, cwds: new Set(members.map((s) => s.cwd)), cwd: members[0]?.cwd,
-      live: live.length, done: live.filter((s) => s.status === 'done').length,
+      id, name, has, cwds: new Set([...members, ...paused.map((p) => p.s)].map((s) => s.cwd)), cwd: members[0]?.cwd ?? paused[0]?.s.cwd,
+      live: live.length, done: live.filter((s) => s.status === 'done').length, working: live.filter((s) => s.status === 'working').length,
+      liveTmux: live.flatMap((s) => tmuxOf(s) ?? []), paused,
     };
   };
   const scopes = all.filter((w: WorkspaceSummary) => w.panes.length).map((w) => {
     const tmux = new Set(w.panes.map(follow));
     const keys = new Set([...tmux].map(keyOfTmux));
-    const has = (s: Session) => { const t = tmuxOf(s); return t ? tmux.has(t) : keys.has(s.key); };
+    const pausedKeys = new Set(w.panes.flatMap((t) => pausedAt.get(t)?.key ?? []));
+    const has = (s: Session) => { const t = tmuxOf(s); return t ? tmux.has(t) : keys.has(s.key) || pausedKeys.has(s.key); };
     for (const s of sessions) if (s.live && has(s)) claimed.add(s.key);
-    return { ...make(w.id, w.name, has), host: wsMachine(w.id) || undefined };
+    return { ...make(w.id, w.name, has, w.panes), host: wsMachine(w.id) || undefined };
   });
   const other = make('other', 'Other', (s) => !!s.live && !claimed.has(s.key));
   return other.live ? [...scopes, other] : scopes;
 }
 
-function ScopeChips({ scopes, scope, total, onScope, onMenu }: { scopes: Scope[]; scope: Scope | null; total: { live: number; done: number }; onScope: (id: string) => void; onMenu: (id: string) => void }) {
-  if (!scopes.length) return null;
-  const chip = (id: string, name: string, live: number, done: number, on: boolean, host?: string) => (
-    <Chip key={id} id={id} name={name} live={live} done={done} on={on} host={host} onScope={onScope} onMenu={id === 'all' || id === 'other' ? undefined : onMenu} />
-  );
+/** A workspace on the home list; a long press opens Rename, Pause and Close. */
+function WorkspaceRow({ x, onScope, onMenu }: { x: Scope; onScope: (id: string) => void; onMenu?: (id: string) => void }) {
+  const press = useLongPress(onMenu ? () => onMenu(x.id) : undefined);
+  const asleep = !x.live && x.paused.length > 0;
+  const parts = [
+    x.live ? `${x.live} running` : '',
+    x.working ? `${x.working} working` : '',
+    x.paused.length ? `${x.paused.length} paused` : '',
+  ].filter(Boolean);
   return (
-    <div className="m-chips" role="tablist" aria-label="Workspace">
-      {chip('all', 'All', total.live, total.done, !scope)}
-      {scopes.map((x) => chip(x.id, x.name, x.live, x.done, scope?.id === x.id, x.host))}
-    </div>
-  );
-}
-
-/** A workspace chip; a long press opens Rename and Close. */
-function Chip({ id, name, live, done, on, host, onScope, onMenu }: {
-  id: string; name: string; live: number; done: number; on: boolean; host?: string; onScope: (id: string) => void; onMenu?: (id: string) => void;
-}) {
-  const press = useLongPress(onMenu ? () => onMenu(id) : undefined);
-  return (
-    <button role="tab" aria-selected={on} className={`m-chip ${on ? 'on' : ''} ${id === 'other' ? 'other' : ''}`} onClick={() => onScope(id)} {...press}>
-      {done > 0 && <span className="m-chip-wait" aria-label={`${done} need you`} />}
-      {host && <span className="m-chip-host" style={{ background: machineColor(host) }} title={`On ${host}`} aria-label={`on ${host}`} />}
-      <span className="m-chip-name">{name}</span>
-      {live > 0 && <span className="m-chip-count">{live}</span>}
+    <button className={`m-ws ${asleep ? 'asleep' : ''} ${x.id === 'other' ? 'other' : ''}`} onClick={() => onScope(x.id)} {...press}>
+      <span className="m-ws-mark">
+        {asleep ? <PauseIcon /> : x.done > 0 ? <span className="m-chip-wait" aria-label={`${x.done} need you`} /> : <span className={`m-ws-dot ${x.working ? 'working' : x.live ? 'live' : ''}`} />}
+      </span>
+      <span className="m-ws-main">
+        <span className="m-ws-name">{x.host && <span className="m-chip-host" style={{ background: machineColor(x.host) }} aria-label={`on ${x.host}`} />}{x.name}</span>
+        <span className="m-ws-sub">{parts.join(' · ') || 'nothing running'}</span>
+      </span>
+      {x.done > 0 && <span className="m-ws-needs">{x.done}</span>}
+      <svg className="m-ws-go" width="8" height="14" viewBox="0 0 8 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m1 1 6 6-6 6" /></svg>
     </button>
   );
 }
 
 // ---- list ------------------------------------------------------------------------------------
 
-function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOpen, onMenu, onScopeMenu, onNew, onDesktop, todos, onTodos, selected, machines }: {
+function SessionList({ sessions, scopes, scope, home, pausedTmux, onScope, loaded, connected, onOpen, onMenu, onScopeMenu, onNew, onDesktop, todos, onTodos, selected, machines }: {
   sessions: Session[]; scopes: Scope[]; scope: Scope | null; onScope: (id: string) => void;
+  home: boolean;            // show what needs you and the workspaces, rather than one workspace's sessions
+  pausedTmux: Map<string, string>;  // session key -> the paused pane that holds it
   loaded: boolean; connected: boolean; onOpen: (s: Session) => void; onMenu: (s: Session) => void; onScopeMenu: (id: string) => void;
   onNew: () => void; onDesktop: () => void;
   todos: number | null;  // proposals waiting in the chip's workspaces; null when no workspace finds todos
@@ -257,23 +280,48 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
     const live = sessions.filter((s) => s.live);
     return { live: live.length, done: live.filter((s) => s.status === 'done').length };
   }, [sessions]);
+  const [pausedShut, setPausedShut] = useState(() => localStorage.getItem(PAUSED_SHUT_KEY) === '1');
+  useEffect(() => { localStorage.setItem(PAUSED_SHUT_KEY, pausedShut ? '1' : '0'); }, [pausedShut]);
   const groups = useMemo(() => {
     const live = sessions.filter((s) => s.live && (!scope || scope.has(s))).sort((a, b) => b.updatedAt - a.updatedAt);
-    const recent = sessions.filter((s) => !s.live && (!scope || scope.has(s) || scope.cwds.has(s.cwd)));
+    const recent = sessions.filter((s) => !s.live && !pausedTmux.has(s.key) && (!scope || scope.has(s) || scope.cwds.has(s.cwd)));
+    const paused = scope ? scope.paused.map((p) => p.s) : sessions.filter((s) => !s.live && pausedTmux.has(s.key));
     return {
+      paused,
       done: live.filter((s) => s.status === 'done'),
       working: live.filter((s) => s.status === 'working'),
       looping: live.filter((s) => s.status === 'looping'),
       open: live.filter((s) => s.status !== 'done' && s.status !== 'working' && s.status !== 'looping'),
       recent: recent.sort((a, b) => b.updatedAt - a.updatedAt),
     };
-  }, [sessions, scope]);
+  }, [sessions, scope, pausedTmux]);
+  const real = scopes.filter((x) => x.id !== 'other');
+  const awake = real.filter((x) => x.live > 0 || !x.paused.length);
+  const asleep = real.filter((x) => !x.live && x.paused.length > 0);
+  const other = scopes.find((x) => x.id === 'other');
+  // Without workspaces there is no home to go back to.
+  const back = !home && scopes.length > 0;
+  const sub = scope ? [scope.live ? `${scope.live} running` : '', scope.paused.length ? `${scope.paused.length} paused` : ''].filter(Boolean).join(' · ') || 'nothing running' : `${total.live} running`;
 
   return (
     <div className="m-screen">
-      <header className="m-top">
-        <span className={`beacon ${connected ? 'on' : 'off'}`} />
-        <span className="m-brand">Tower</span>
+      <header className={`m-top ${back ? 'm-top-session' : ''}`}>
+        {back ? (
+          <>
+            <button className="m-back" onClick={() => onScope(HOME)} aria-label="Workspaces">
+              <svg width="12" height="20" viewBox="0 0 12 20" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2 2 10l8 8" /></svg>
+            </button>
+            <div className="m-title m-title-list">
+              <span className="m-title-main">{scope ? scope.name : 'All sessions'}</span>
+              <span className="m-title-sub">{!connected && <span className="m-offline">offline · </span>}{sub}</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <span className={`beacon ${connected ? 'on' : 'off'}`} />
+            <span className="m-brand">Tower</span>
+          </>
+        )}
         <span className="m-top-sum">
           {groups.done.length > 0 && <span className="sum-wait">{groups.done.length} need{groups.done.length === 1 ? 's' : ''} you</span>}
           {groups.working.length > 0 && <span className="sum-work">{groups.working.length} working</span>}
@@ -283,10 +331,34 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
             Todos{todos > 0 && <span className="m-todos-n">{todos}</span>}
           </button>
         )}
+        {back && scope && scope.id !== 'other' && (
+          <button className="m-back m-more" onClick={() => onScopeMenu(scope.id)} aria-label="Workspace actions">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><circle cx="4" cy="10" r="1.8" /><circle cx="10" cy="10" r="1.8" /><circle cx="16" cy="10" r="1.8" /></svg>
+          </button>
+        )}
         <button className="m-icon-btn" onClick={onNew} aria-label="New session">+</button>
       </header>
       {machines && <div className="m-machines">{machines}</div>}
-      <ScopeChips scopes={scopes} scope={scope} total={total} onScope={onScope} onMenu={onScopeMenu} />
+      {home ? (
+        <div className="m-scroll">
+          <Group title="Needs you" rows={groups.done} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
+          <section className="m-group">
+            <h3>Workspaces<span>{awake.length}</span></h3>
+            {awake.map((x) => <WorkspaceRow key={x.id} x={x} onScope={onScope} onMenu={onScopeMenu} />)}
+            {other && <WorkspaceRow x={other} onScope={onScope} />}
+          </section>
+          {asleep.length > 0 && (
+            <section className="m-group">
+              <h3><button className="m-group-toggle" onClick={() => setPausedShut((v) => !v)} aria-expanded={!pausedShut}>
+                <span className={`caret ${pausedShut ? '' : 'open'}`}>▸</span>Paused<span>{asleep.length}</span>
+              </button></h3>
+              {!pausedShut && asleep.map((x) => <WorkspaceRow key={x.id} x={x} onScope={onScope} onMenu={onScopeMenu} />)}
+            </section>
+          )}
+          <button className="m-all-link" onClick={() => onScope('all')}>All sessions<span>{total.live} running</span></button>
+          <button className="m-layout-link" onClick={onDesktop}>Use the desktop layout</button>
+        </div>
+      ) : (
       <div className="m-scroll">
         {!loaded && <div className="m-note">Reading sessions…</div>}
         <Group title="Needs you" rows={groups.done} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
@@ -294,26 +366,28 @@ function SessionList({ sessions, scopes, scope, onScope, loaded, connected, onOp
         <Group title="Looping" rows={groups.looping} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
         <Group title="Open" rows={groups.open} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
         {loaded && !groups.done.length && !groups.working.length && !groups.looping.length && !groups.open.length && <div className="m-note">{scope ? `Nothing running in ${scope.name}.` : 'No live sessions.'} Resume one below or start a new one with +.</div>}
+        <Group title="Paused" rows={groups.paused} paused now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
         <Group title={scope && scope.id !== 'other' ? `Recent in ${scope.name}` : 'Recent'} rows={groups.recent.slice(0, recentShown)} now={now} selected={selected} onOpen={onOpen} onMenu={onMenu} />
         {groups.recent.length > recentShown && <button className="btn ghost wide" onClick={() => setRecentShown((n) => n + RECENT_PAGE * 2)}>Show more</button>}
         <button className="m-layout-link" onClick={onDesktop}>Use the desktop layout</button>
       </div>
+      )}
     </div>
   );
 }
 
-function Group({ title, rows, now, selected, onOpen, onMenu }: { title: string; rows: Session[]; now: number; selected: string | null; onOpen: (s: Session) => void; onMenu: (s: Session) => void }) {
+function Group({ title, rows, now, selected, onOpen, onMenu, paused }: { title: string; rows: Session[]; now: number; selected: string | null; onOpen: (s: Session) => void; onMenu: (s: Session) => void; paused?: boolean }) {
   if (!rows.length) return null;
   return (
     <section className="m-group">
       <h3>{title}<span>{rows.length}</span></h3>
-      {rows.map((s) => <Row key={s.key} s={s} now={now} on={s.key === selected} onOpen={onOpen} onMenu={tmuxOf(s) ? onMenu : undefined} />)}
+      {rows.map((s) => <Row key={s.key} s={s} now={now} on={s.key === selected} paused={paused} onOpen={onOpen} onMenu={tmuxOf(s) ? onMenu : undefined} />)}
     </section>
   );
 }
 
 /** A session row; a long press on one running in Tower opens its actions. */
-function Row({ s, now, on, onOpen, onMenu }: { s: Session; now: number; on: boolean; onOpen: (s: Session) => void; onMenu?: (s: Session) => void }) {
+function Row({ s, now, on, onOpen, onMenu, paused }: { s: Session; now: number; on: boolean; onOpen: (s: Session) => void; onMenu?: (s: Session) => void; paused?: boolean }) {
   const press = useLongPress(onMenu ? () => onMenu(s) : undefined);
   return (
     <button className={`m-row agent-${s.agent} status-${s.status} ${s.live ? 'live' : ''} ${on ? 'on' : ''}`} aria-current={on || undefined} onClick={() => onOpen(s)} {...press}>
@@ -332,6 +406,7 @@ function Row({ s, now, on, onOpen, onMenu }: { s: Session; now: number; on: bool
       </span>
       <span className="m-row-side">
         {s.live && <span className={`m-status status-${s.status}`}>{s.live.kind === 'external' ? 'terminal' : statusWord(s.status) || 'idle'}</span>}
+        {paused && !s.live && <span className="m-status status-paused">paused</span>}
         <time>{relTime(s.updatedAt, now)}</time>
       </span>
     </button>
@@ -497,6 +572,12 @@ function SessionSheet({ s, workspaces, onClose, onKilled }: { s: Session; worksp
         : <button className="m-sheet-item accent" onClick={() => setNaming(true)}>New workspace…</button>}
       {current && <button className="m-sheet-item muted" onClick={() => move(null)}>Remove from {current.name}</button>}
       <div className="m-sheet-sep" />
+      {s.transcriptPath && !killing && (
+        <button className="m-sheet-item" onClick={() => run(() => api.pause(tmux), onClose)}>
+          <span className="m-sheet-label">Pause session</span>
+          <span className="m-sheet-hint">{current ? `stays in ${current.name}` : 'stops the process'}{s.status === 'working' ? ' · stops its turn' : ''}</span>
+        </button>
+      )}
       {killing ? (
         <div className="m-sheet-confirm">
           <p>Stop this session? The conversation stays under Recent and can be resumed.</p>
@@ -514,19 +595,47 @@ function SessionSheet({ s, workspaces, onClose, onKilled }: { s: Session; worksp
 function WorkspaceSheet({ w, onClose }: { w: Scope; onClose: () => void }) {
   const [naming, setNaming] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [pausing, setPausing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const each = async (jobs: Promise<unknown>[]) => {
+    setErr(null);
+    const failed = (await Promise.allSettled(jobs)).filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failed.length) setErr(`${failed.length} of ${jobs.length} failed: ${(failed[0].reason as Error).message}`); else onClose();
+  };
+  const pauseAll = () => each(w.liveTmux.map((t) => api.pause(t)));
+  const resumeAll = () => each(w.paused.map((p) => api.resumeLost(p.tmux, skipPerms())));
   const send = async (op: WorkspaceOpRequest) => {
     setErr(null);
     try { await api.workspaceOp(op); onClose(); } catch (e) { setErr((e as Error).message); }
   };
   return (
-    <ActionSheet title={w.name} sub={`Workspace · ${w.live} running`} onClose={onClose}>
+    <ActionSheet title={w.name} sub={`Workspace · ${w.live} running${w.paused.length ? ` · ${w.paused.length} paused` : ''}`} onClose={onClose}>
+      {w.live > 0 && (pausing ? (
+        <div className="m-sheet-confirm">
+          <p>{w.working} of them {w.working === 1 ? 'is' : 'are'} working. Pausing stops the turn; the conversation stays.</p>
+          <div className="m-sheet-actions">
+            <button className="btn ghost" onClick={() => setPausing(false)}>Cancel</button>
+            <button className="btn primary" onClick={pauseAll}>Pause anyway</button>
+          </div>
+        </div>
+      ) : (
+        <button className="m-sheet-item" onClick={() => (w.working ? setPausing(true) : pauseAll())}>
+          <span className="m-sheet-label">Pause {w.live === 1 ? 'the running session' : `all ${w.live} running sessions`}</span>
+          <span className="m-sheet-hint">frees memory</span>
+        </button>
+      ))}
+      {w.paused.length > 0 && (
+        <button className="m-sheet-item" onClick={resumeAll}>
+          <span className="m-sheet-label">Resume {w.paused.length === 1 ? 'the paused session' : `all ${w.paused.length} paused sessions`}</span>
+        </button>
+      )}
+      {(w.live > 0 || w.paused.length > 0) && <div className="m-sheet-sep" />}
       {naming
         ? <NameForm initial={w.name} action="Rename" onSubmit={(name) => send({ op: 'rename', workspace: w.id, name })} />
         : <button className="m-sheet-item" onClick={() => setNaming(true)}>Rename…</button>}
       {closing ? (
         <div className="m-sheet-confirm">
-          <p>Close {w.name}? Its sessions keep running and move to Other.</p>
+          <p>Close {w.name}? Its sessions keep running and move to Other.{w.paused.length ? ' Its paused sessions go to Recent.' : ''}</p>
           <div className="m-sheet-actions">
             <button className="btn ghost" onClick={() => setClosing(false)}>Cancel</button>
             <button className="btn danger armed" onClick={() => send({ op: 'close', workspace: w.id })}>Close workspace</button>
@@ -543,7 +652,7 @@ function WorkspaceSheet({ w, onClose }: { w: Scope; onClose: () => void }) {
 type Tab = 'chat' | 'screen' | 'term';
 
 /** `onBack` is left out beside the list, which is the way back there. */
-function SessionView({ s, connected, onBack, onMenu, wide }: { s: Session; connected: boolean; onBack?: () => void; onMenu: () => void; wide: boolean }) {
+function SessionView({ s, pausedTmux, connected, onBack, onMenu, wide }: { s: Session; pausedTmux?: string; connected: boolean; onBack?: () => void; onMenu: () => void; wide: boolean }) {
   const tmux = s.live?.kind === 'tmux' && !s.live.dead ? s.live.tmux : null;
   const [tab, setTab] = useState<Tab>(() => localStorage.getItem(TAB_KEY) === 'screen' ? 'screen' : 'chat');
   const shown: Tab = !tmux && tab !== 'chat' ? 'chat' : tab;
@@ -554,7 +663,8 @@ function SessionView({ s, connected, onBack, onMenu, wide }: { s: Session; conne
 
   const resume = async () => {
     setResuming(true); setErr(null);
-    try { await api.resume(s.agent, s.id, { skipPermissions: skipPerms(), place: {} }); }
+    // A paused session goes back into its own pane; any other joins a workspace by its folder.
+    try { await (pausedTmux ? api.resumeLost(pausedTmux, skipPerms()) : api.resume(s.agent, s.id, { skipPermissions: skipPerms(), place: {} })); }
     catch (e) { setErr((e as Error).message); }
     finally { setResuming(false); }
   };
@@ -571,7 +681,7 @@ function SessionView({ s, connected, onBack, onMenu, wide }: { s: Session; conne
           <span className="m-title-main">{s.title || 'Untitled'}</span>
           <span className="m-title-sub">
             {!connected && <span className="m-offline">offline · </span>}
-            {s.host && <>{s.host} · </>}{s.project}{s.live ? ` · ${s.live.kind === 'external' ? 'in a terminal' : statusWord(s.status) || 'idle'}` : ''}
+            {s.host && <>{s.host} · </>}{s.project}{s.live ? ` · ${s.live.kind === 'external' ? 'in a terminal' : statusWord(s.status) || 'idle'}` : pausedTmux ? ' · paused' : ''}
           </span>
         </div>
         {s.live && <ContextBadge session={s} />}
@@ -602,7 +712,8 @@ function SessionView({ s, connected, onBack, onMenu, wide }: { s: Session; conne
               ? <p className="small muted">Running in a terminal outside Tower, so it can only be read here.</p>
               : <>
                   {err && <p className="small m-err">{err}</p>}
-                  <button className="btn primary wide" disabled={resuming} onClick={resume}>{resuming ? 'Resuming…' : `Resume in ${s.agent === 'claude' ? 'Claude Code' : 'Codex'}`}</button>
+                  {pausedTmux && <p className="small muted">Paused. No process runs; it resumes where it stopped.</p>}
+                  <button className="btn primary wide" disabled={resuming} onClick={resume}>{resuming ? 'Resuming…' : pausedTmux ? 'Resume' : `Resume in ${s.agent === 'claude' ? 'Claude Code' : 'Codex'}`}</button>
                 </>}
           </div>
         )}

@@ -27,6 +27,7 @@ export const api = {
     j<{ tmux: string; key?: string }>('/api/sessions/new', { method: 'POST', body: JSON.stringify(body) }),
   resumeLost: (tmux: string, skipPermissions?: boolean) =>
     j<{ tmux: string }>(`/api/lost/${encodeURIComponent(tmux)}/resume`, { method: 'POST', body: JSON.stringify({ skipPermissions }) }),
+  pause: (tmux: string) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/pause`, { method: 'POST' }),
   kill: (tmux: string) => j<{ ok: true }>(`/api/tmux/${encodeURIComponent(tmux)}/kill`, { method: 'POST' }),
   settings: () => j<Settings>('/api/settings'),
   saveSettings: (s: Partial<Settings>) => j<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(s) }),

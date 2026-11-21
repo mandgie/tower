@@ -83,6 +83,8 @@ function pruneRenames(panes: TmuxPane[]): void {
  */
 const LIVE_FILE = path.join(APP_DIR, 'live.json');
 const LOST_MAX_AGE_MS = 14 * 24 * 3600 * 1000;
+/** A snapshot built while a pause was in progress can still list the session; do not take that for a resume. */
+const PAUSE_SETTLE_MS = 10_000;
 let liveRecord: { serverStart: number; sessions: LostSession[] } = { serverStart: 0, sessions: [] };
 const lost = new Map<string, LostSession>();
 try {
@@ -112,7 +114,10 @@ function trackLost(panes: TmuxPane[], sessions: Session[]): void {
     current.push({ tmux: s.live.tmux, agent: s.agent, id: s.id, cwd: s.cwd, at: now });
   }
   // The UI only uses entries for panes it still has, so one nobody resumed for two weeks can go.
-  for (const [t, l] of lost) if (alive.has(t) || now - l.at > LOST_MAX_AGE_MS) lost.delete(t);
+  // A paused one stays until it runs again or its pane is removed (closeTmux).
+  for (const [t, l] of lost) {
+    if (l.paused ? alive.has(t) && now - l.at > PAUSE_SETTLE_MS : alive.has(t) || now - l.at > LOST_MAX_AGE_MS) lost.delete(t);
+  }
   const same = current.length === liveRecord.sessions.length && current.every((c, i) => liveRecord.sessions[i].tmux === c.tmux && liveRecord.sessions[i].id === c.id && liveRecord.sessions[i].cwd === c.cwd);
   if (serverStart) liveRecord = { serverStart, sessions: same ? liveRecord.sessions : current };
   else liveRecord = { serverStart: 0, sessions: [] };
@@ -131,8 +136,9 @@ export async function resumeLost(tmux: string, s: Session, o: { skipPermissions?
     renames.set(tmux, r.tmux);
     saveRenames();
   }
-  lost.delete(tmux);
-  saveLive();
+  // Under the same name, the entry goes when a snapshot sees the session run (trackLost), so no snapshot
+  // in between shows the pane as neither lost nor live.
+  if (r.tmux !== tmux) { lost.delete(tmux); saveLive(); }
   return r;
 }
 
@@ -410,6 +416,20 @@ export async function closeTmux(name: string): Promise<void> {
   // A session closed on purpose is not lost, even if it was the last one and tmux looks gone next time.
   liveRecord.sessions = liveRecord.sessions.filter((s) => s.tmux !== name);
   lost.delete(name);
+  saveLive();
+  await killSession(name);
+  pending.delete(name);
+  savePending();
+}
+
+/**
+ * Stop a session's process and keep its pane: the conversation stays on disk and the pane shows it as
+ * paused until the user resumes it (resumeLost). Uses the list of lost sessions, so there is one path back.
+ */
+export async function pauseTmux(name: string, s: Session): Promise<void> {
+  if (!s.transcriptPath) throw new Error('This session has no conversation yet, so there is nothing to resume later.');
+  liveRecord.sessions = liveRecord.sessions.filter((x) => x.tmux !== name);
+  lost.set(name, { tmux: name, agent: s.agent, id: s.id, cwd: s.cwd, at: Date.now(), paused: true });
   saveLive();
   await killSession(name);
   pending.delete(name);

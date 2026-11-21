@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { PORT, APP_DIR, setServerUrl } from './config.js';
-import { buildSnapshot, launchNew, resumeSession, resumeLost, lostSession, lostSessions, closeTmux, listProjectDirs, folderInfo, placeSession, clearPlacement } from './sessions.js';
+import { buildSnapshot, launchNew, resumeSession, resumeLost, lostSession, lostSessions, closeTmux, pauseTmux, listProjectDirs, folderInfo, placeSession, clearPlacement } from './sessions.js';
 import { claudeTranscript } from './claude.js';
 import { codexTranscript } from './codex.js';
 import { ensureServer, capturePane, sendKeys, pressKeys, paneModes, scrollPane } from './tmux.js';
@@ -162,7 +162,7 @@ async function hostRoute(req: http.IncomingMessage, res: http.ServerResponse, ur
       return { ...r, tmux: onHost(lost.host, r.tmux) };
     });
   }
-  mm = p.match(/^\/api\/tmux\/([^/]+)\/(kill|capture|send|keys|scroll)$/);
+  mm = p.match(/^\/api\/tmux\/([^/]+)\/(kill|pause|capture|send|keys|scroll)$/);
   const pane = mm && splitHost(decodeURIComponent(mm[1]));
   if (mm && pane) {
     const at = `/api/tmux/${encodeURIComponent(pane.name)}/${mm[2]}${url.search}`;
@@ -435,10 +435,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       setTimeout(refresh, 300);
       return json(res, 200, r);
     }
-    mm = p.match(/^\/api\/tmux\/([^/]+)\/(kill|capture|send|keys|scroll)$/);
+    mm = p.match(/^\/api\/tmux\/([^/]+)\/(kill|pause|capture|send|keys|scroll)$/);
     if (mm) {
       const name = decodeURIComponent(mm[1]);
       if (mm[2] === 'kill' && m === 'POST') { await closeTmux(name); setTimeout(refresh, 200); return json(res, 200, { ok: true }); }
+      if (mm[2] === 'pause' && m === 'POST') {
+        const s = snapshot.sessions.find((x) => x.live?.kind === 'tmux' && x.live.tmux === name);
+        if (!s) return json(res, 404, { error: 'This session is not running.' });
+        await pauseTmux(name, s);
+        setTimeout(refresh, 200);
+        return json(res, 200, { ok: true });
+      }
       if (mm[2] === 'capture') {
         const modes = await paneModes(name);
         return json(res, 200, { text: await capturePane(name, Number(url.searchParams.get('lines') || 60), true), ...modes });

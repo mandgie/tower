@@ -4,7 +4,8 @@ import { placementTarget, applyWorkspaceOp } from '../../shared/snapshot';
 import { onHost, splitHost } from '../../shared/hosts';
 import { api, useSnapshot, usePresent, useViewing, type LaunchBody } from './api';
 import { StatusStrip } from './components/StatusStrip';
-import { Sidebar } from './components/Sidebar';
+import { Sidebar, type SidebarView } from './components/Sidebar';
+import { WorkspaceList, listOrder } from './components/WorkspaceList';
 import { Transcript } from './components/Transcript';
 import { SessionHeader } from './components/SessionHeader';
 import { NewSession } from './components/NewSession';
@@ -25,6 +26,9 @@ const VIEW_KEY = 'ms.view';
 const SIDEBAR_KEY = 'ms.sidebar';
 const TODOS_KEY = 'ms.todosOpen';
 const ACTIVE_KEY = 'ms.activeByMachine';
+/** Where the workspaces show: 'side' is a list in the sidebar, 'top' the tab bar above the grid. */
+const WS_PLACE_KEY = 'ms.wsPlace';
+const WS_LIST_SHOWN_KEY = 'ms.wsListShown';
 
 const newId = () => Math.random().toString(36).slice(2, 10);
 
@@ -73,7 +77,18 @@ export function App() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [{ workspaces, activeId }, setWs] = useState(loadWorkspaces);
   const [focused, setFocused] = useState<string | null>(null);
-  const [view, setView] = useState<'project' | 'recent'>(() => (localStorage.getItem(VIEW_KEY) as any) || 'project');
+  const [wsPlace, setWsPlaceState] = useState<'side' | 'top'>(() => (localStorage.getItem(WS_PLACE_KEY) === 'top' ? 'top' : 'side'));
+  const [viewPicked, setView] = useState<SidebarView>(() => {
+    // The first start with the workspace list opens on it, whatever view was last used.
+    if (localStorage.getItem(WS_PLACE_KEY) !== 'top' && !localStorage.getItem(WS_LIST_SHOWN_KEY)) { localStorage.setItem(WS_LIST_SHOWN_KEY, '1'); return 'workspaces'; }
+    return (localStorage.getItem(VIEW_KEY) as SidebarView) || 'workspaces';
+  });
+  const view: SidebarView = wsPlace === 'top' && viewPicked === 'workspaces' ? 'project' : viewPicked;
+  const setWsPlace = useCallback((p: 'side' | 'top') => {
+    localStorage.setItem(WS_PLACE_KEY, p);
+    setWsPlaceState(p);
+    if (p === 'side') { setView('workspaces'); setSidebarOpen(true); }
+  }, []);
   const [search, setSearch] = useState('');
   const [machine, setMachine] = useState<MachineFilter>(() => localStorage.getItem(FILTER_KEY) ?? ALL);
   const [newOpen, setNewOpen] = useState<{ cwd?: string; agent?: Agent } | null>(null);
@@ -93,7 +108,7 @@ export function App() {
 
   // Only the Mac's workspaces live here; a host's come from the host on every start.
   useEffect(() => { localStorage.setItem(WS_KEY, JSON.stringify({ workspaces: workspaces.filter((w) => !wsHost(w)), activeId })); }, [workspaces, activeId]);
-  useEffect(() => { localStorage.setItem(VIEW_KEY, view); }, [view]);
+  useEffect(() => { localStorage.setItem(VIEW_KEY, viewPicked); }, [viewPicked]);
   useEffect(() => { localStorage.setItem(FILTER_KEY, machine); }, [machine]);
   // A host that was removed in Settings leaves its filter: show everything again.
   const hosts = snapshot?.hosts ?? [];
@@ -171,6 +186,21 @@ export function App() {
   }, [todos, workspaces, updateWs, showMachine]);
   // Sessions a shutdown took with it keep their panes until they are resumed (server/sessions.ts trackLost).
   const lostNames = useMemo(() => new Set((snapshot?.lost ?? []).map((l) => l.tmux)), [snapshot?.lost]);
+  // Paused panes: the user stopped the process and kept the pane. Each maps to its conversation, when the
+  // snapshot still lists it. A session that runs again is live, whatever the list says for a moment.
+  const paused = useMemo(() => {
+    const m = new Map<string, Session | undefined>();
+    for (const l of snapshot?.lost ?? []) {
+      if (!l.paused || byTmux.has(l.tmux)) continue;
+      const h = splitHost(l.id);
+      m.set(l.tmux, byKey.get(h ? onHost(h.host, `${l.agent}:${h.name}`) : `${l.agent}:${l.id}`));
+    }
+    return m;
+  }, [snapshot?.lost, byTmux, byKey]);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+  /** The workspaces in the order they show, which ⌘1–9 and next/previous follow: the sidebar list puts the fully paused ones last. */
+  const shownList = useMemo(() => (wsPlace === 'side' ? listOrder(groupList, paused) : groupList), [wsPlace, groupList, paused]);
   // Follow panes whose tmux session was renamed (a Claude process moved to a new session id after
   // /clear, or a Codex launch learned its thread id), and drop panes whose tmux session is gone.
   useEffect(() => {
@@ -210,7 +240,8 @@ export function App() {
       if (isAutoName(w) && panes[0]) { const s = byTmux.get(panes[0].tmux); if (s && s.project !== name) { name = s.project; changed = true; } }
       return panes === w.panes && name === w.name ? w : { ...w, panes, name, auto: name !== w.name ? true : w.auto, maximized: w.maximized && panes.some((p) => p.tmux === w.maximized) ? w.maximized : null };
     });
-    const pruned = next.filter((w) => w.panes.length > 0 || w.id === activeId || next.length === 1 || w.panes.length === (workspaces.find((x) => x.id === w.id)?.panes.length ?? 0));
+    // A workspace the user named stays when its last pane goes; only the user closes it.
+    const pruned = next.filter((w) => w.panes.length > 0 || !isAutoName(w) || w.id === activeId || next.length === 1 || w.panes.length === (workspaces.find((x) => x.id === w.id)?.panes.length ?? 0));
     if (pruned.length !== next.length) changed = true;
     if (changed) {
       // Merge into the current list: other effects of this snapshot (a host's workspaces, placements) update it too.
@@ -233,8 +264,9 @@ export function App() {
       .catch((e) => setResumeErrors((cur) => ({ ...cur, [tmux]: (e as Error).message })));
   }, []);
   useEffect(() => {
-    for (const p of active?.panes ?? []) if (lostNames.has(p.tmux) && !resumeAsked.current.has(p.tmux)) resumeLost(p.tmux);
-  }, [active, lostNames, resumeLost]);
+    const waits = new Set((snapshot?.lost ?? []).filter((l) => l.paused).map((l) => l.tmux));
+    for (const p of active?.panes ?? []) if (lostNames.has(p.tmux) && !waits.has(p.tmux) && !resumeAsked.current.has(p.tmux)) resumeLost(p.tmux);
+  }, [active, lostNames, resumeLost]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A host's workspaces: stored on the host, edited here. `hostSync` holds, per host, the list (as `canon`)
   // known to be on the host. A list from the host that differs from it is a change made elsewhere and
@@ -322,6 +354,11 @@ export function App() {
   useEffect(() => {
     const ready = [...(snapshot?.workspaceOps ?? []), ...(snapshot?.hostWorkspaceOps ?? [])].filter((op) => op.op !== 'move' || byTmux.has(op.tmux));
     if (!ready.length) return;
+    // A workspace closed on the phone: its paused panes have no process to keep, so drop the server's note of them.
+    for (const op of ready) {
+      if (op.op !== 'close') continue;
+      for (const p of workspaces.find((w) => w.id === op.workspace)?.panes ?? []) if (pausedRef.current.has(p.tmux)) api.kill(p.tmux).catch(() => {});
+    }
     updateWs((ws) => {
       let next = ws;
       for (const op of ready) {
@@ -376,13 +413,57 @@ export function App() {
     else { const s = byTmux.get(tmux); if (s) setSelectedKey(s.key); }
   }, [byTmux, findPane, updateWs, showMachine, group, active, workspaces]);
 
+  /** Bring a pane on screen, running or paused: its workspace, the focus, and the selection that goes with it. */
+  const focusPane = useCallback((tmux: string) => {
+    const home = findPane(tmux);
+    if (!home) return;
+    updateWs((ws) => ({ workspaces: ws, activeId: home.id }));
+    showMachine(wsHost(home));
+    setFocused(tmux);
+    setSelectedKey(byTmux.get(tmux)?.key ?? null);
+  }, [findPane, updateWs, showMachine, byTmux]);
+
   const select = useCallback((s: Session) => {
+    // A paused session has a pane: show that, with its Resume button, rather than the transcript.
+    const pausedAt = s.live ? undefined : [...paused].find(([t, x]) => x?.key === s.key && findPane(t))?.[0];
+    if (pausedAt) { focusPane(pausedAt); return; }
     setSelectedKey(s.key);
     if (s.live?.kind === 'tmux') openTerminal(s.live.tmux, s.agent, s.key);
     else setFocused(null);
-  }, [openTerminal]);
+  }, [openTerminal, paused, findPane, focusPane]);
+
+  /** Move a pane to another workspace of the same machine, at the end. */
+  const movePane = useCallback((tmux: string, to: string) => {
+    updateWs((ws, id) => {
+      const from = ws.find((w) => w.panes.some((p) => p.tmux === tmux)), target = ws.find((w) => w.id === to);
+      if (!from || !target || from === target || wsHost(from) !== wsHost(target)) return { workspaces: ws };
+      const pane = from.panes.find((p) => p.tmux === tmux)!;
+      const list = ws.map((w) => (w === from ? { ...w, panes: w.panes.filter((p) => p.tmux !== tmux), maximized: w.maximized === tmux ? null : w.maximized }
+        : w === target ? { ...w, panes: [...w.panes, pane], maximized: null } : w))
+        // As when a pane is removed: a workspace the user never named goes with its last pane.
+        .filter((w) => !(w.id === from.id && w.panes.length === 0 && isAutoName(w)));
+      return { workspaces: list, activeId: list.some((w) => w.id === id) ? id : to };
+    });
+  }, [updateWs]);
+
+  /** Put a workspace where another one of its machine is. */
+  const reorderWorkspace = useCallback((id: string, at: string) => {
+    updateWs((ws) => {
+      const w = ws.find((x) => x.id === id);
+      if (!w) return { workspaces: ws };
+      return { workspaces: withMachine(ws, wsHost(w), (mine) => {
+        const i = mine.findIndex((x) => x.id === id), j = mine.findIndex((x) => x.id === at);
+        if (i < 0 || j < 0 || i === j) return mine;
+        const next = [...mine];
+        next.splice(j, 0, next.splice(i, 1)[0]);
+        return next;
+      }) };
+    });
+  }, [updateWs]);
 
   const removePane = useCallback((tmux: string) => {
+    // A paused pane has no process; removing it also drops the server's note of it.
+    if (pausedRef.current.has(tmux)) api.kill(tmux).catch(() => {});
     // The pane that inherits focus and selection: the next one in the same workspace, else the previous.
     const home = workspaces.find((w) => w.panes.some((p) => p.tmux === tmux));
     let heir: string | null = null;
@@ -393,8 +474,8 @@ export function App() {
     }
     updateWs((ws, id) => {
       const list = ws.map((w) => (w.panes.some((p) => p.tmux === tmux) ? { ...w, panes: w.panes.filter((p) => p.tmux !== tmux), maximized: w.maximized === tmux ? null : w.maximized } : w));
-      // Auto-delete a workspace that just lost its last pane, unless it is the only one of its machine.
-      const emptied = list.filter((w) => w.panes.length === 0 && ws.find((x) => x.id === w.id)!.panes.length > 0 && list.filter((x) => wsHost(x) === wsHost(w)).length > 1);
+      // Auto-delete a workspace that just lost its last pane, unless the user named it or it is the only one of its machine.
+      const emptied = list.filter((w) => w.panes.length === 0 && isAutoName(w) && ws.find((x) => x.id === w.id)!.panes.length > 0 && list.filter((x) => wsHost(x) === wsHost(w)).length > 1);
       const kept = list.filter((w) => !emptied.includes(w));
       return { workspaces: kept, activeId: kept.some((w) => w.id === id) ? id : kept[0]?.id };
     });
@@ -415,6 +496,16 @@ export function App() {
     try { await api.kill(tmux); } catch (e) { setError((e as Error).message); }
   }, [removePane]);
 
+  /** Stop the processes of these panes and keep the panes (server pauseTmux). */
+  const pausePanes = useCallback(async (names: string[]) => {
+    const keys = new Set(names.map((t) => byTmux.get(t)?.key));
+    // A selected session that is not live switches the window to its transcript; a paused pane must not.
+    setSelectedKey((k) => (k && keys.has(k) ? null : k));
+    const failed: string[] = [];
+    await Promise.all(names.map((t) => api.pause(t).catch((e) => { failed.push((e as Error).message); })));
+    if (failed.length) setError(names.length === 1 ? failed[0] : `${failed.length} of ${names.length} sessions were not paused: ${failed[0]}`);
+  }, [byTmux]);
+
   const swapPanes = useCallback((a: string, b: string) => {
     updateWs((ws) => ({ workspaces: ws.map((w) => {
       const ia = w.panes.findIndex((p) => p.tmux === a), ib = w.panes.findIndex((p) => p.tmux === b);
@@ -429,6 +520,10 @@ export function App() {
     if (tmux) setFocused(tmux);
   }, [updateWs]);
 
+  const renameWorkspace = useCallback((id: string, name: string) => {
+    updateWs((ws) => ({ workspaces: ws.map((w) => (w.id === id ? { ...w, name, auto: false } : w)) }));
+  }, [updateWs]);
+
   /** A new workspace on the machine on screen. */
   const createWorkspace = useCallback(() => {
     const id = group ? onHost(group, newId()) : newId();
@@ -437,6 +532,8 @@ export function App() {
   }, [updateWs, group]);
 
   const closeWorkspace = useCallback((id: string) => {
+    // Its paused panes have no process to keep running: drop the server's note of them.
+    for (const p of workspaces.find((x) => x.id === id)?.panes ?? []) if (pausedRef.current.has(p.tmux)) api.kill(p.tmux).catch(() => {});
     updateWs((ws, cur) => {
       const w = ws.find((x) => x.id === id);
       if (!w) return { workspaces: ws };
@@ -444,7 +541,7 @@ export function App() {
       const i = same.indexOf(w);
       return { workspaces: ws.filter((x) => x.id !== id), activeId: cur === id ? (same[i - 1] ?? same[i + 1])?.id : cur };
     });
-  }, [updateWs]);
+  }, [updateWs, workspaces]);
 
   const activateWorkspace = useCallback((id: string) => {
     updateWs((ws) => ({ workspaces: ws, activeId: id }));
@@ -497,11 +594,11 @@ export function App() {
   const duplicate = useCallback(async () => {
     // Fall back to another pane of the active workspace: focus is not restored after a reload, and a pane
     // launched a moment ago has no session yet.
-    const src = (focused && byTmux.get(focused)) || active?.panes.map((p) => byTmux.get(p.tmux)).find(Boolean) || selected;
+    const src = (focused && byTmux.get(focused)) || active?.panes.map((p) => byTmux.get(p.tmux) ?? paused.get(p.tmux)).find(Boolean) || selected;
     if (!src) { setNewOpen({}); return; }
     try { await launch({ agent: src.agent, cwd: src.cwd, skipPermissions: localStorage.getItem('ms.skipPerms') !== '0' }); }
     catch (e) { setError((e as Error).message); }
-  }, [focused, active, byTmux, selected, launch]);
+  }, [focused, active, byTmux, paused, selected, launch]);
 
   // Keyboard shortcuts (also forwarded from the Electron menu).
   useEffect(() => {
@@ -517,11 +614,11 @@ export function App() {
       else if (cmd === 'settings') setSettingsOpen((v) => !v);
       else if (cmd === 'todos') setTodosOpen((v) => !v);
       else if (cmd === 'doctor') setDoctorOpen(true);
-      else if (cmd.startsWith('workspace:')) { const w = groupList[Number(cmd.slice(10)) - 1]; if (w) activateWorkspace(w.id); }
+      else if (cmd.startsWith('workspace:')) { const w = shownList[Number(cmd.slice(10)) - 1]; if (w) activateWorkspace(w.id); }
       else if (cmd === 'next-workspace' || cmd === 'prev-workspace') {
-        if (groupList.length < 2) return;
-        const i = groupList.findIndex((w) => w.id === active?.id);
-        activateWorkspace(groupList[(i + (cmd === 'next-workspace' ? 1 : groupList.length - 1)) % groupList.length].id);
+        if (shownList.length < 2) return;
+        const i = shownList.findIndex((w) => w.id === active?.id);
+        activateWorkspace(shownList[(i + (cmd === 'next-workspace' ? 1 : shownList.length - 1)) % shownList.length].id);
       }
       else if (cmd.startsWith('focus:')) moveFocus(cmd.slice(6) as any);
     };
@@ -553,7 +650,7 @@ export function App() {
     window.addEventListener('keydown', onKey, true);
     const off = window.multisession?.onCommand(run);
     return () => { window.removeEventListener('keydown', onKey, true); off?.(); };
-  }, [selected, focused, active, groupList, newOpen, settingsOpen, doctorOpen, removePane, setMaximized, createWorkspace, activateWorkspace, moveFocus, duplicate]);
+  }, [selected, focused, active, shownList, newOpen, settingsOpen, doctorOpen, removePane, setMaximized, createWorkspace, activateWorkspace, moveFocus, duplicate]);
 
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(null), 6000); return () => clearTimeout(t); }, [error]);
 
@@ -566,12 +663,21 @@ export function App() {
   const onScreen = transcriptMode ? [selected!.key] : (active?.maximized ? [active.maximized] : active?.panes.map((p) => p.tmux) ?? []).flatMap((t) => byTmux.get(t)?.key ?? []);
   useViewing(onScreen, present);
 
+  // With the workspace list on screen the name is edited there; the bar above the grid edits it otherwise.
+  const listShown = wsPlace === 'side' && sidebarOpen && view === 'workspaces' && !search.trim();
+
   return (
     <div className="app">
       <StatusStrip sessions={sessions.filter((s) => inMachine(machineShown, s))} hosts={hosts} connected={connected} onPick={select} activeKey={selectedKey}
         sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((v) => !v)} />
       <div className="body">
         {sidebarOpen && <Sidebar
+          workspaces={wsPlace === 'side' ? (
+            <WorkspaceList workspaces={groupList} activeId={active?.id ?? ''} byTmux={byTmux} paused={paused} lost={lostNames} focused={transcriptMode ? null : focused}
+              editing={renaming} setEditing={setRenaming} todoCounts={todoCounts}
+              onActivate={activateWorkspace} onCreate={createWorkspace} onClose={closeWorkspace}
+              onRename={renameWorkspace} onFocusPane={focusPane} onMovePane={movePane} onReorder={reorderWorkspace} />
+          ) : undefined}
           snapshot={snapshot}
           machine={machineShown}
           onMachine={pickMachine}
@@ -587,17 +693,19 @@ export function App() {
         />}
         <main className="main">
           {(groupList.length > 1 || (active?.panes.length ?? 0) > 0) && (
-            <WorkspaceBar workspaces={groupList} activeId={active?.id ?? ''} byTmux={byTmux} todosAvailable={!group}
+            <WorkspaceBar tabs={wsPlace === 'top'} workspaces={groupList} activeId={active?.id ?? ''} byTmux={byTmux} paused={paused} todosAvailable={!group}
+              onPause={(id) => pausePanes((workspaces.find((w) => w.id === id)?.panes ?? []).map((p) => p.tmux).filter((t) => byTmux.has(t)))}
+              onResumeAll={(id) => { for (const p of workspaces.find((w) => w.id === id)?.panes ?? []) if (paused.has(p.tmux)) resumeLost(p.tmux); }}
               onActivate={activateWorkspace} onCreate={createWorkspace} onClose={closeWorkspace}
-              editing={renaming} setEditing={setRenaming}
+              editing={listShown ? null : renaming} setEditing={setRenaming}
               todoCounts={todoCounts} todosOpen={todosOpen} onTodos={() => setTodosOpen((v) => !v)}
               onLayout={(id, cols) => updateWs((ws) => ({ workspaces: ws.map((w) => (w.id === id ? { ...w, cols } : w)) }))}
-              onRename={(id, name) => updateWs((ws) => ({ workspaces: ws.map((w) => (w.id === id ? { ...w, name, auto: false } : w)) }))} />
+              onRename={renameWorkspace} />
           )}
           <div className="stage-row">
           <div className="stage">
             {workspaces.map((w) => (
-              <PaneGrid key={w.id} workspace={w} byTmux={byTmux} lost={lostNames} resumeErrors={resumeErrors} onResumeLost={resumeLost} focused={focused} visible={!transcriptMode && w.id === active?.id}
+              <PaneGrid key={w.id} workspace={w} byTmux={byTmux} lost={lostNames} paused={paused} onPause={(tmux) => pausePanes([tmux])} resumeErrors={resumeErrors} onResumeLost={resumeLost} focused={focused} visible={!transcriptMode && w.id === active?.id}
                 onFocus={(tmux) => { setFocused(tmux); const s = byTmux.get(tmux); if (s) setSelectedKey(s.key); }}
                 onSwap={swapPanes} onMaximize={setMaximized} onRemove={removePane} onKill={killPane} onAdd={duplicate} onTodo={showTodo} />
             ))}
@@ -630,7 +738,7 @@ export function App() {
         </main>
       </div>
       {newOpen && <NewSession preset={newOpen} projects={snapshot?.projects ?? []} hosts={snapshot?.hosts} onClose={() => setNewOpen(null)} onLaunch={launch} />}
-      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} onDoctor={() => { setSettingsOpen(false); setDoctorOpen(true); }} />}
+      {settingsOpen && <SettingsPanel wsPlace={wsPlace} onWsPlace={setWsPlace} onClose={() => setSettingsOpen(false)} onDoctor={() => { setSettingsOpen(false); setDoctorOpen(true); }} />}
       {doctorOpen && <Doctor initial={doctor} onClose={() => setDoctorOpen(false)} />}
       {error && <div className="toast" role="alert">{error}</div>}
     </div>
